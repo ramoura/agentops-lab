@@ -1,0 +1,13 @@
+{
+  "name": "@agentops/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Núcleo determinístico do AgentOps Lab — parser de pergunta, investigation engine, regras de hipótese/confiança, relatório e audit log",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentops/types": "0.1.0"
+  }
+}

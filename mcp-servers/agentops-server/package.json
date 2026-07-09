@@ -1,0 +1,19 @@
+{
+  "name": "@agentops/agentops-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server stdio único do AgentOps Lab — 9 tools read-only de observabilidade e knowledge base",
+  "type": "module",
+  "exports": {
+    ".": "./src/server-factory.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@agentops/providers": "0.1.0",
+    "@agentops/types": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^3.25.76"
+  }
+}

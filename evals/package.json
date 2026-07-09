@@ -1,0 +1,15 @@
+{
+  "name": "@agentops/evals",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Eval harness do AgentOps Lab — casos de teste, scorer determinístico e runner via client MCP real",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/runner.ts"
+  },
+  "dependencies": {
+    "@agentops/cli-agent": "0.1.0",
+    "@agentops/core": "0.1.0",
+    "@agentops/types": "0.1.0"
+  }
+}

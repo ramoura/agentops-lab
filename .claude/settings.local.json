@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"---EXIT:$?---\")",
+      "WebSearch",
+      "WebFetch(domain:github.com)",
+      "Bash(npm test *)",
+      "Bash(npm run *)",
+      "Bash(node *)",
+      "Bash(npx vitest *)",
+      "Bash(npm install *)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

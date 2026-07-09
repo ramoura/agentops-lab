@@ -1,0 +1,13 @@
+{
+  "name": "@agentops/types",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Contratos TypeScript + schemas Zod do AgentOps Lab (tools, datasets, relatório, auditoria, eval)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "case-002-payment-api-timeout",
+  "question": "Investigue por que o payment-api teve timeout entre 14h e 14h20 em 2026-07-08",
+  "expected_findings": [
+    "PaymentGatewayTimeoutException",
+    "p99",
+    "POST /payments",
+    "dependência externa"
+  ],
+  "must_not_include": [
+    "regressão introduzida",
+    "deploy da versão",
+    "DatabaseTimeoutException",
+    "reiniciar automaticamente"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "case-001-database-timeout",
+  "question": "Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08",
+  "expected_findings": [
+    "DatabaseTimeoutException",
+    "p99",
+    "deploy",
+    "POST /checkout",
+    "connection pool"
+  ],
+  "must_not_include": [
+    "certeza absoluta",
+    "reiniciar automaticamente",
+    "rollback executado",
+    "drop table"
+  ]
+}

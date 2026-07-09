@@ -1,0 +1,19 @@
+{
+  "name": "@agentops/cli-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CLI do AgentOps Lab — MCP client (stdio), investigation engine e renderer do relatório de investigação",
+  "type": "module",
+  "exports": {
+    "./mcp-tool-invoker": "./src/mcp-tool-invoker.ts",
+    "./renderer": "./src/renderer.ts"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts"
+  },
+  "dependencies": {
+    "@agentops/core": "0.1.0",
+    "@agentops/types": "0.1.0",
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  }
+}

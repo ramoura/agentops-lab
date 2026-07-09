@@ -1,0 +1,14 @@
+{
+  "name": "@agentops/providers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fake providers do AgentOps Lab — leitura read-only de datasets/ e knowledge-base/ com agregações determinísticas",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@agentops/types": "0.1.0",
+    "zod": "^3.25.76"
+  }
+}

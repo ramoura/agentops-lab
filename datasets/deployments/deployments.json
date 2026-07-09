@@ -1,0 +1,23 @@
+[
+  {
+    "timestamp": "2026-07-06T15:12:00-03:00",
+    "service": "payment-api",
+    "version": "2026.07.06-2",
+    "previousVersion": "2026.07.05-1",
+    "changeSummary": "Atualização de dependências e ajustes de logging (sem mudança funcional)"
+  },
+  {
+    "timestamp": "2026-07-07T16:40:00-03:00",
+    "service": "checkout-api",
+    "version": "2026.07.07-3",
+    "previousVersion": "2026.07.07-2",
+    "changeSummary": "Correção de mensagens de erro no fluxo de cupom de desconto"
+  },
+  {
+    "timestamp": "2026-07-08T10:03:00-03:00",
+    "service": "checkout-api",
+    "version": "2026.07.08-1",
+    "previousVersion": "2026.07.07-3",
+    "changeSummary": "Refatoração do acesso ao banco de pagamentos (novas queries no fluxo de checkout)"
+  }
+]

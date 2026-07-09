@@ -1,0 +1,5 @@
+{"timestamp":"2026-07-08T10:00:05-03:00","service":"glitchy-api","level":"ERROR","traceId":"gli-0001","endpoint":"POST /orders","statusCode":500,"exception":"NullPointerException","message":"Unexpected null while building order","latencyMs":120}
+esta linha não é JSON {{{
+{"timestamp":"2026-07-08T10:01:00-03:00","service":"glitchy-api","level":"FATAL","traceId":"gli-0002"}
+{"timestamp":"2026-07-08T10:02:10-03:00","service":"glitchy-api","level":"INFO","traceId":"gli-0003","endpoint":"GET /orders","statusCode":200,"exception":null,"message":"Orders listed","latencyMs":45}
+{"timestamp":"2026-07-08T10:03:20-03:00","service":"glitchy-api","level":"WARN","traceId":"gli-0004","endpoint":"POST /orders","statusCode":429,"exception":null,"message":"Rate limit hit","latencyMs":12}
