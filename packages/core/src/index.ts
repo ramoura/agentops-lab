@@ -3,6 +3,8 @@ export { InMemoryAuditLog } from './audit-log.js';
 export { ToolInvocationError } from './tool-invoker.js';
 export type { ToolInvoker } from './tool-invoker.js';
 export { DeterministicInvestigationEngine, DEPLOY_LOOKBACK_MS, exceptionSearchTerms } from './engine.js';
+export { DeterministicInvestigationAssistant } from './deterministic-assistant.js';
+export type { DeterministicOutcome } from './deterministic-assistant.js';
 export {
   dominantException,
   firstDeploy,

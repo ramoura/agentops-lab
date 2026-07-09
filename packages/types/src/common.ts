@@ -49,6 +49,23 @@ export const TOOL_NAMES = [
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
+/** Motores de investigação disponíveis (V2). `deterministic` é o default. */
+export const ENGINE_KINDS = ['deterministic', 'llm'] as const;
+export type EngineKind = (typeof ENGINE_KINDS)[number];
+
+/**
+ * Definição de tool descoberta via `client.listTools()` do MCP (nome +
+ * descrição + JSON Schema). Mapeada de forma passthrough para o formato de
+ * tool da Messages API; `annotations.readOnlyHint === true` é verificado pelo
+ * lado consumidor (reforço em runtime da garantia read-only — RF10).
+ */
+export interface McpToolDefinition {
+  name: ToolName;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  annotations?: { readOnlyHint?: boolean };
+}
+
 /** Timestamp ISO 8601 com offset explícito (ex.: `2026-07-08T10:00:00-03:00`). */
 export const isoTimestampSchema = z.string().datetime({
   offset: true,

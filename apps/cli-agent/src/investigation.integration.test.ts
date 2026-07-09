@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DeterministicInvestigationEngine, PtBrQuestionParser } from '@agentops/core';
+import { TOOL_NAMES } from '@agentops/types';
 import type { InvestigationReport } from '@agentops/types';
 import { McpToolInvoker } from './mcp-tool-invoker.js';
 import { renderReport } from './renderer.js';
@@ -43,6 +44,21 @@ async function investigate(question: string): Promise<InvestigationReport> {
   }
   return engine.investigate(parsed.context, invoker);
 }
+
+// Teste de integração de listTools() (tarefa 1.0 da V2)
+describe('listTools() contra o agentops-server real', () => {
+  it('retorna as 9 definições de TOOL_NAMES, com descrição, JSON Schema e readOnlyHint (RF10/RF12/RF13)', async () => {
+    const tools = await invoker.listTools();
+
+    expect(tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort());
+    for (const tool of tools) {
+      expect(tool.description, `descrição vazia em ${tool.name}`).not.toBe('');
+      expect(tool.inputSchema['type'], `inputSchema de ${tool.name}`).toBe('object');
+      // Verificação de segurança pelo lado consumidor: read-only declarado pelo server
+      expect(tool.annotations?.readOnlyHint, `readOnlyHint em ${tool.name}`).toBe(true);
+    }
+  }, 30_000);
+});
 
 // Teste 67
 describe('case-001 — checkout-api (cenário principal)', () => {

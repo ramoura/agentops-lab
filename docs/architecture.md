@@ -1,21 +1,24 @@
-# Arquitetura — AgentOps Lab v1
+# Arquitetura — AgentOps Lab
 
-> Especificação completa: [`tasks/prd-incident-investigation-assistant/techspec.md`](../tasks/prd-incident-investigation-assistant/techspec.md) · Requisitos: [`prd.md`](../tasks/prd-incident-investigation-assistant/prd.md)
+> Especificação completa: [`techspec.md`](../tasks/prd-incident-investigation-assistant/techspec.md) (V1) · [`techspec-v2.md`](../tasks/prd-incident-investigation-assistant/techspec-v2.md) (V2, motor LLM) · Requisitos: [`prd.md`](../tasks/prd-incident-investigation-assistant/prd.md)
 
 ## Visão geral
 
-Monorepo **npm workspaces** (Node.js 20+, TypeScript ESM estrito) com seis workspaces. O princípio central: **o engine não contém dados** — todo fato do relatório nasce de uma chamada de tool MCP, e a auditoria é estrutural (decorator), não opcional.
+Monorepo **npm workspaces** (Node.js 20+, TypeScript ESM estrito) com sete workspaces. O princípio central: **o motor não contém dados** — todo fato do relatório nasce de uma chamada de tool MCP, e a auditoria é estrutural (decorator), não opcional. Desde a V2 há **dois motores** atrás da mesma abstração `InvestigationAssistant` (pergunta crua → `InvestigationOutcome`): o determinístico (default) e o LLM (`--engine=llm`).
 
 | Workspace | Papel |
 | --- | --- |
 | `@agentops/types` | Fonte única dos contratos: schemas Zod + tipos inferidos (`z.infer`) das 9 tools, entidades de dataset, `InvestigationReport`, `ToolCallRecord`, `EvalCase`/`EvalCaseResult`. Sem dependências internas. |
 | `@agentops/providers` | `FakeObservabilityProvider` (lê `datasets/`) e `FakeKnowledgeProvider` (lê `knowledge-base/`), atrás das interfaces estáveis `ObservabilityProvider`/`KnowledgeProvider`. Toda agregação (contagens, percentis, ranking de busca) acontece aqui. |
 | `@agentops/agentops-server` | MCP server **real** via stdio (SDK oficial v1.x): módulos `observability/` (5 tools) e `knowledge/` (4 tools) compostos por uma factory. Valida entrada com Zod, delega ao provider, responde `structuredContent` tipado. Logs só em stderr. |
-| `@agentops/core` | `PtBrQuestionParser` (extração determinística de serviço/janela/sintoma), `DeterministicInvestigationEngine` (pipeline de 11 passos espelhando a skill), regras de hipótese/confiança e `InMemoryAuditLog`. Depende só de `types` — não conhece MCP nem filesystem. |
-| `@agentops/cli-agent` | Entrypoint `npm run investigate`: MCP **client** (`StdioClientTransport` spawna o server via tsx), `McpToolInvoker` adapta `callTool()` à interface `ToolInvoker`, renderer em texto puro PT-BR. |
-| `@agentops/evals` | `npm run eval`: runner que executa os casos pelo mesmo caminho da CLI e scorer 100% determinístico. |
+| `@agentops/core` | `PtBrQuestionParser` (extração determinística de serviço/janela/sintoma), `DeterministicInvestigationEngine` (pipeline de 11 passos espelhando a skill), regras de hipótese/confiança, `InMemoryAuditLog` e o adapter `DeterministicInvestigationAssistant` (parser + engine atrás da interface `InvestigationAssistant`). Depende só de `types` — não conhece MCP nem filesystem. |
+| `@agentops/llm-engine` | Motor LLM (V2): `LlmInvestigationAssistant` (loop agêntico manual sobre a Messages API), `AnthropicChatPort`/`AnthropicChatAdapter` (única superfície do `@anthropic-ai/sdk`), `prompt-builder` (skill + contrato de formato + guardrails), `engine-config` (envs, defaults, `LlmEngineError`) e `tool-mapping` (MCP `listTools()` → tools Anthropic, com checagem de `readOnlyHint`). |
+| `@agentops/cli-agent` | Entrypoint `npm run investigate -- [--engine=<kind>]`: MCP **client** (`StdioClientTransport` spawna o server via tsx), `McpToolInvoker` adapta `callTool()`/`listTools()` à interface do consumidor, `resolveEngineArgs` (flag + env `AGENTOPS_ENGINE`), renderer em texto puro PT-BR com despacho por `outcome.kind` (`renderOutcome`). |
+| `@agentops/evals` | `npm run eval -- [--engine=<kind>]`: runner que executa os casos pelo mesmo caminho da CLI e scoring 100% determinístico nos dois modos — `DeterministicEvalScorer` (report estruturado) ou `TextReportScorer` (seções do markdown do LLM). |
 
 ## Fluxo de dados (investigação)
+
+Modo `deterministic` (default):
 
 ```text
 pergunta (argv)
@@ -28,6 +31,21 @@ pergunta (argv)
   → regras de hipótese (R1–R3) + classifyConfidence → InvestigationReport
   → renderer (7 seções do relatório + registro de auditoria) → stdout
 ```
+
+Modo `llm` (V2 — mesma cadeia MCP, sem parser e sem pipeline fixo):
+
+```text
+pergunta crua (argv)
+  → CLI valida ANTHROPIC_API_KEY e monta o system prompt (skill + contrato de formato + guardrails)
+  → McpToolInvoker.listTools() → 9 definições MCP → mapeadas para `tools` da Messages API
+  → LlmInvestigationAssistant (loop: messages.create() → stop_reason 'tool_use'?)
+        → InMemoryAuditLog.wrap(McpToolInvoker).invoke() por tool_use → tool_result → nova rodada
+        → 'end_turn' → markdown final (7 seções do RF4, cada evidência com linha `Fonte:`)
+  → outcome { kind:'markdown', markdown, audit }
+  → CLI: stdout = markdown + seção "Tools chamadas" anexada por código (RF7); tokens/rodadas em stderr
+```
+
+O modelo escolhe as tools pelas descrições descobertas em runtime; falha de tool vira `tool_result` com `is_error: true` (o modelo degrada, equivalente ao `missingData` da V1) e `readOnlyHint === true` é verificado na inicialização.
 
 ### Raciocínio determinístico (regras de hipótese)
 
@@ -51,13 +69,13 @@ Todos em `packages/types` (Zod + `z.infer`), com convenções fixas: campos sem 
 
 ## Eval harness
 
-`evals/cases/*.json` declara `id`, `question`, `expected_findings`, `must_not_include`. O runner conecta um client MCP real, investiga cada caso e o `DeterministicEvalScorer` avalia o texto renderizado + o `InvestigationReport` estruturado: findings, termos proibidos, `cita_evidencias`, `separa_fato_de_hipotese`, `proximos_passos_seguros`. A lista de termos destrutivos do scorer é **independente** da lista do engine — o eval é juiz, não espelho: se o core regredir, o eval acusa.
+`evals/cases/*.json` declara `id`, `question`, `expected_findings`, `must_not_include`. O runner conecta um client MCP real, investiga cada caso com o motor escolhido e pontua com os mesmos 5 grupos de critérios — findings, termos proibidos, `cita_evidencias`, `separa_fato_de_hipotese`, `proximos_passos_seguros` — pelo scorer adequado ao outcome: `DeterministicEvalScorer` sobre o `InvestigationReport` estruturado (modo default, byte-idêntico à V1) ou `TextReportScorer` sobre as seções do markdown do LLM (`extractSections` tolera títulos sublinhados e `##`). A lista de termos destrutivos dos scorers é **independente** da lista do engine — o eval é juiz, não espelho: se o core regredir, o eval acusa. `npm run eval:llm` é o smoke opt-in com LLM real (único ponto da suíte que gasta tokens).
 
 ## Observabilidade da v1
 
 - **Audit log** exibido ao final de cada investigação (feature e instrumento de observabilidade do agente).
 - **Logs do server** exclusivamente em stderr (`[agentops-server] LEVEL mensagem`; nível via `AGENTOPS_LOG_LEVEL`, default `warn`) — stdout é o canal JSON-RPC do protocolo.
-- **CLI**: progresso em stderr, relatório em stdout (redirecionamento limpo).
+- **CLI**: progresso em stderr, relatório em stdout (redirecionamento limpo). No modo llm, stderr ganha o progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: Xk entrada · Yk saída · N rodada(s)`); a `ANTHROPIC_API_KEY` jamais aparece em progresso, audit, relatório ou erros.
 - **Eval como monitor de regressão**: `npm run eval` é o health check do agente.
 - `ToolCallRecord.durationMs` já prepara a exportação de spans/tracing na V4 sem mudar contratos.
 

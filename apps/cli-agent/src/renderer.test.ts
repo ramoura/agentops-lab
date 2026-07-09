@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { InvestigationReport, MissingField } from '@agentops/types';
-import { renderMissingFields, renderReport, renderUsage, SECTION_TITLES, shouldUseColor } from './renderer.js';
+import type { InvestigationOutcome, InvestigationReport, MissingField } from '@agentops/types';
+import {
+  renderAuditSection,
+  renderMissingFields,
+  renderOutcome,
+  renderReport,
+  renderUsage,
+  SECTION_TITLES,
+  shouldUseColor,
+} from './renderer.js';
 
 const ANSI_RE = /\[[0-9;]*m/g;
 
@@ -144,7 +152,71 @@ describe('saída redirecionada para arquivo', () => {
     expect(output).toContain('→ 2 exception(s); top: DatabaseTimeoutException (3ms)');
   });
 
-  it('renderUsage orienta o formato do comando', () => {
+  it('renderUsage orienta o formato do comando e a flag --engine', () => {
     expect(renderUsage()).toContain('Uso: npm run investigate -- "<pergunta>"');
+    expect(renderUsage()).toContain('--engine=deterministic|llm');
+  });
+});
+
+// Teste 25 (V2)
+describe('renderAuditSection — extraída do renderReport', () => {
+  it('produz saída idêntica à seção de auditoria do renderReport (regressão)', () => {
+    const section = renderAuditSection(sampleReport.audit, false);
+
+    // O relatório completo termina exatamente com a seção extraída
+    expect(renderReport(sampleReport, false).endsWith(`${section}\n`)).toBe(true);
+    expect(section).toContain(`Tools chamadas\n${'-'.repeat('Tools chamadas'.length)}`);
+    expect(section).toContain('1. get_error_summary');
+    expect(section).toContain('→ 2 exception(s); top: DatabaseTimeoutException (3ms)');
+  });
+
+  it('registros vazios → "Nenhuma tool foi chamada."', () => {
+    const section = renderAuditSection([], false);
+
+    expect(section).toContain('Tools chamadas');
+    expect(section).toContain('Nenhuma tool foi chamada.');
+  });
+});
+
+// Teste 26 (V2)
+describe('renderOutcome — despacho por kind', () => {
+  const markdownOutcome: InvestigationOutcome = {
+    kind: 'markdown',
+    markdown: '## Resumo executivo\nPico de 5xx no checkout-api correlacionado ao deploy 2026.07.08-1.',
+    audit: sampleReport.audit,
+  };
+
+  it('markdown → texto do modelo + seção "Tools chamadas" anexada por código (RF7)', () => {
+    const output = renderOutcome(markdownOutcome, false);
+
+    expect(output.startsWith('## Resumo executivo\n')).toBe(true);
+    expect(output).toContain(`Tools chamadas\n${'-'.repeat('Tools chamadas'.length)}`);
+    expect(output).toContain('1. get_error_summary');
+    expect(output.endsWith('\n')).toBe(true);
+    // A auditoria vem do audit log, byte-idêntica à seção compartilhada
+    expect(output).toContain(renderAuditSection(sampleReport.audit, false));
+  });
+
+  it('report → delega a renderReport (byte-idêntico à V1)', () => {
+    const outcome: InvestigationOutcome = { kind: 'report', report: sampleReport };
+
+    expect(renderOutcome(outcome, false)).toBe(renderReport(sampleReport, false));
+    expect(renderOutcome(outcome, true)).toBe(renderReport(sampleReport, true));
+  });
+
+  it('clarification → delega a renderMissingFields', () => {
+    const missing: MissingField[] = [{ field: 'window', hint: 'informe o horário da janela' }];
+    const outcome: InvestigationOutcome = { kind: 'clarification', missing };
+
+    expect(renderOutcome(outcome, false)).toBe(renderMissingFields(missing, false));
+  });
+
+  // Teste 28 (V2): acessibilidade do modo llm — sem ANSI quando redirecionado
+  it('markdown sem cor não contém ANSI; conteúdo idêntico ao colorido', () => {
+    const plain = renderOutcome(markdownOutcome, false);
+    const colored = renderOutcome(markdownOutcome, true);
+
+    expect(plain).not.toMatch(ANSI_RE);
+    expect(colored.replace(ANSI_RE, '')).toBe(plain);
   });
 });

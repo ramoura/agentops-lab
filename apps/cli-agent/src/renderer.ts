@@ -1,4 +1,4 @@
-import type { InvestigationReport, MissingField, ToolCallRecord } from '@agentops/types';
+import type { InvestigationOutcome, InvestigationReport, MissingField, ToolCallRecord } from '@agentops/types';
 
 /**
  * Renderização do relatório em texto puro PT-BR: as 7 seções do RF4 na ordem,
@@ -40,10 +40,14 @@ export function shouldUseColor(
   return stream.isTTY === true;
 }
 
-/** Mensagem de uso (pergunta ausente → stderr + exit code 1). */
+/** Mensagem de uso (pergunta ausente ou `--engine` inválido → stderr + exit code 1). */
 export function renderUsage(): string {
   return [
     'Uso: npm run investigate -- "<pergunta>"',
+    '',
+    'Opções:',
+    '  --engine=deterministic|llm  Motor de investigação (default: deterministic; env AGENTOPS_ENGINE).',
+    '                              O modo llm requer a variável ANTHROPIC_API_KEY.',
     '',
     'Exemplo:',
     '  npm run investigate -- "Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08"',
@@ -142,14 +146,39 @@ export function renderReport(report: InvestigationReport, useColor: boolean): st
   sections.push(heading(c, SECTION_TITLES[6]), report.confidence);
 
   // Registro de auditoria (RF7)
-  sections.push(heading(c, SECTION_TITLES[7]));
-  if (report.audit.length === 0) {
-    sections.push('Nenhuma tool foi chamada.');
-  } else {
-    sections.push(report.audit.map((record) => renderAuditRecord(c, record)).join('\n'));
-  }
+  sections.push(renderAuditSection(report.audit, useColor));
 
   return `${sections.join('\n\n')}\n`;
+}
+
+/**
+ * Seção "Tools chamadas" (RF7), compartilhada pelos dois motores: no modo
+ * deterministic fecha o `renderReport`; no modo llm é anexada por código ao
+ * markdown do modelo — a auditoria nunca depende da honestidade do modelo.
+ */
+export function renderAuditSection(records: ToolCallRecord[], useColor: boolean): string {
+  const c = colorizer(useColor);
+  const body =
+    records.length === 0
+      ? 'Nenhuma tool foi chamada.'
+      : records.map((record) => renderAuditRecord(c, record)).join('\n');
+  return `${heading(c, SECTION_TITLES[7])}\n\n${body}`;
+}
+
+/**
+ * Despacho por variante do outcome (V2): `report` e `clarification` delegam
+ * aos renderers da V1 (byte-idênticos); `markdown` imprime o texto do modelo
+ * e anexa a seção "Tools chamadas" gerada do audit log (RF7).
+ */
+export function renderOutcome(outcome: InvestigationOutcome, useColor: boolean): string {
+  switch (outcome.kind) {
+    case 'report':
+      return renderReport(outcome.report, useColor);
+    case 'clarification':
+      return renderMissingFields(outcome.missing, useColor);
+    case 'markdown':
+      return `${outcome.markdown.trim()}\n\n${renderAuditSection(outcome.audit, useColor)}\n`;
+  }
 }
 
 // ---------------------------------------------------------------------------

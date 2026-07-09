@@ -5,7 +5,10 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { ToolInvocationError } from '@agentops/core';
-import type { ToolInvoker, ToolName } from '@agentops/types';
+import { TOOL_NAMES } from '@agentops/types';
+import type { McpToolDefinition, ToolInvoker, ToolName } from '@agentops/types';
+
+export type { McpToolDefinition } from '@agentops/types';
 
 /**
  * Único ponto de contato da CLI com o SDK MCP (lado consumidor): isola a
@@ -84,10 +87,43 @@ export class McpToolInvoker implements ToolInvoker {
     return result.structuredContent as TOut;
   }
 
+  /**
+   * Descobre as definições das tools do server via `client.listTools()` do
+   * SDK MCP (nome + descrição + JSON Schema), para consumo pelo motor LLM
+   * (RF12/RF13). Nome fora de `TOOL_NAMES` → erro: o contrato de investigação
+   * é fechado, tool desconhecida indica server/versão incompatível.
+   */
+  async listTools(): Promise<McpToolDefinition[]> {
+    let tools: Awaited<ReturnType<Client['listTools']>>['tools'];
+    try {
+      ({ tools } = await this.client.listTools());
+    } catch (error) {
+      throw new McpConnectionError(`falha ao listar as tools do agentops-server: ${errorMessage(error)}`);
+    }
+
+    return tools.map((tool) => {
+      if (!isKnownToolName(tool.name)) {
+        throw new McpConnectionError(
+          `o agentops-server expôs uma tool desconhecida: "${tool.name}" (esperadas: ${TOOL_NAMES.join(', ')})`,
+        );
+      }
+      return {
+        name: tool.name,
+        description: tool.description ?? '',
+        inputSchema: tool.inputSchema,
+        annotations: tool.annotations,
+      };
+    });
+  }
+
   /** Encerra a conexão e o processo filho do server. */
   async close(): Promise<void> {
     await this.client.close();
   }
+}
+
+function isKnownToolName(name: string): name is ToolName {
+  return (TOOL_NAMES as readonly string[]).includes(name);
 }
 
 function firstText(result: CallToolResult): string {

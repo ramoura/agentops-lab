@@ -1,0 +1,16 @@
+{
+  "name": "@agentops/llm-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Motor LLM do AgentOps Lab — loop agêntico manual sobre a Messages API da Anthropic, consumindo as MCP tools do agentops-server",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/__fixtures__/testing.ts"
+  },
+  "dependencies": {
+    "@agentops/core": "0.1.0",
+    "@agentops/types": "0.1.0",
+    "@anthropic-ai/sdk": "^0.110.0"
+  }
+}

@@ -1,6 +1,6 @@
 # Roadmap — AgentOps Lab
 
-A v1 é 100% local, determinística e read-only. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfície do SDK MCP isolada em dois arquivos).
+A v1 é 100% local, determinística e read-only; a V2 (motor LLM) está **entregue**. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfícies dos SDKs MCP e Anthropic isoladas em arquivos únicos).
 
 ## Migração do SDK MCP v1.x → v2 (exercício de estudo)
 
@@ -11,12 +11,15 @@ O projeto usa o SDK oficial `@modelcontextprotocol/sdk` **v1.x** (release estáv
 
 Nenhum outro pacote importa o SDK. O eval harness serve de rede de segurança da migração: `npm run eval` deve permanecer com case-001 em 100% antes e depois.
 
-## V2 — Motor LLM reutilizando as mesmas MCP tools
+## V2 — Motor LLM reutilizando as mesmas MCP tools ✅ (entregue)
 
-- Adicionar um `LlmInvestigationEngine` implementando a mesma interface `InvestigationEngine`, usando a API da Anthropic com tool use apontando para as **mesmas 9 tools MCP** (nenhuma mudança em server/providers).
-- A skill `investigate-incident` passa de "processo espelhado em código" a **contexto carregado no prompt** do modelo.
-- O eval determinístico continua válido (matching sobre o relatório final); avaliar acrescentar tolerância de fraseado e, se necessário, um segundo scorer.
-- Seleção de engine por flag/env na CLI (`--engine=deterministic|llm`), mantendo o determinístico como default sem API key.
+Especificação: [`techspec-v2.md`](../tasks/prd-incident-investigation-assistant/techspec-v2.md).
+
+- **Entregue**: `LlmInvestigationAssistant` (`packages/llm-engine`) com loop agêntico manual sobre a Messages API da Anthropic, consumindo as **mesmas 9 tools MCP** descobertas em runtime via `listTools()` (nenhuma mudança em server/providers/datasets). Em vez de forçar a interface `InvestigationEngine` (que exige contexto parseado e report estruturado), a V2 introduziu a abstração `InvestigationAssistant` (pergunta crua → `InvestigationOutcome`), com o caminho da V1 preservado byte-idêntico atrás do adapter `DeterministicInvestigationAssistant`.
+- **Entregue**: a skill `investigate-incident` passou de "processo espelhado em código" a **contexto do modelo** (system prompt com contrato de formato + guardrails).
+- **Entregue**: seleção de engine por `--engine=deterministic|llm` + env `AGENTOPS_ENGINE` na CLI e no eval, com o determinístico como default sem API key; `npm run eval:llm` como smoke opt-in.
+- **Entregue**: scoring do modo llm 100% determinístico via `TextReportScorer` (mesmos 5 grupos de critérios sobre as seções do markdown), com o scorer da V1 intocado.
+- **Pendente para uma V2.x**: tolerância de fraseado/sinônimos nos findings (descartada de propósito nesta fase) e, se a taxa de flake incomodar, um segundo scorer.
 
 ## V3 — Providers reais de observabilidade
 

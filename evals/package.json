@@ -10,6 +10,7 @@
   "dependencies": {
     "@agentops/cli-agent": "0.1.0",
     "@agentops/core": "0.1.0",
+    "@agentops/llm-engine": "0.1.0",
     "@agentops/types": "0.1.0"
   }
 }

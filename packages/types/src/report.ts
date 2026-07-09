@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { timeWindowSchema } from './common.js';
 import { toolCallRecordSchema } from './audit.js';
-import type { ToolInvoker } from './audit.js';
+import type { ToolCallRecord, ToolInvoker } from './audit.js';
 
 /** Resultado da interpretação da pergunta (RF2). */
 export const investigationContextSchema = z.object({
@@ -62,4 +62,20 @@ export type InvestigationReport = z.infer<typeof investigationReportSchema>;
 
 export interface InvestigationEngine {
   investigate(context: InvestigationContext, tools: ToolInvoker): Promise<InvestigationReport>;
+}
+
+/**
+ * Resultado de uma investigação, independente do motor (V2):
+ * - `report` — relatório estruturado do motor determinístico (schema da V1 inalterado);
+ * - `markdown` — relatório em texto livre do motor LLM + auditoria coletada por código (RF7);
+ * - `clarification` — pergunta ambígua no motor determinístico (RF3/US10), nenhuma tool invocada.
+ */
+export type InvestigationOutcome =
+  | { kind: 'report'; report: InvestigationReport }
+  | { kind: 'markdown'; markdown: string; audit: ToolCallRecord[] }
+  | { kind: 'clarification'; missing: MissingField[] };
+
+/** Motor de investigação de ponta a ponta: pergunta crua → resultado (V2). */
+export interface InvestigationAssistant {
+  investigate(question: string, tools: ToolInvoker): Promise<InvestigationOutcome>;
 }

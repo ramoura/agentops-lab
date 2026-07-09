@@ -7,9 +7,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SECTION_TITLES } from '../src/renderer.js';
 
 /**
- * E2E da CLI como processo real (testes 71–74 e 76 da techspec): exercita o
- * comando `npm run investigate` de ponta a ponta — script raiz, spawn do
- * agentops-server via MCP stdio, engine e renderer.
+ * E2E da CLI como processo real (testes 71–74 e 76 da techspec V1 + cenários
+ * da V2): exercita o comando `npm run investigate` de ponta a ponta — script
+ * raiz, spawn do agentops-server via MCP stdio, engine e renderer. Nenhum
+ * teste exige `ANTHROPIC_API_KEY`: o modo llm só é exercitado nos fluxos de
+ * erro (key ausente, flag inválida).
  */
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -18,10 +20,11 @@ const ANSI_RE = /\[[0-9;]*m/;
 const QUESTION_CASE_001 = 'Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08';
 const QUESTION_CASE_003 = 'Investigue por que o inventory-api teve erro 5xx entre 10h e 10h30 em 2026-07-08';
 
-function runInvestigate(args: string[]) {
+function runInvestigate(args: string[], env: NodeJS.ProcessEnv = {}) {
   return execa('npm', ['run', '--silent', 'investigate', ...args], {
     cwd: repoRoot,
     reject: false,
+    env,
   });
 }
 
@@ -93,6 +96,33 @@ describe('npm run investigate -- "<pergunta case-003>" (US9)', () => {
     const confidenceSection = result.stdout.slice(result.stdout.indexOf('Confiança da análise'));
     expect(confidenceSection).toContain('baixa');
     expect(result.stdout).not.toContain('DatabaseTimeoutException');
+  }, 90_000);
+});
+
+// V2 — modo llm sem ANTHROPIC_API_KEY
+describe('npm run investigate -- --engine=llm sem ANTHROPIC_API_KEY', () => {
+  it('sai com código 1, stderr orientativo e stdout vazio, sem spawnar o server', async () => {
+    // env vazia sobrescreve qualquer key do ambiente do desenvolvedor
+    const result = await runInvestigate(['--', '--engine=llm', QUESTION_CASE_001], { ANTHROPIC_API_KEY: '' });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('O modo --engine=llm requer a variável ANTHROPIC_API_KEY');
+    expect(result.stderr).toContain('export ANTHROPIC_API_KEY=');
+    expect(result.stdout).toBe('');
+    // Validação acontece ANTES do spawn do agentops-server
+    expect(result.stderr).not.toContain('Iniciando o agentops-server');
+  }, 90_000);
+});
+
+// V2 — flag inválida
+describe('npm run investigate -- --engine=foo', () => {
+  it('sai com código 1 e imprime a mensagem de uso', async () => {
+    const result = await runInvestigate(['--', '--engine=foo', QUESTION_CASE_001]);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--engine inválido: "foo"');
+    expect(result.stderr).toContain('Uso: npm run investigate -- "<pergunta>"');
+    expect(result.stdout).toBe('');
   }, 90_000);
 });
 

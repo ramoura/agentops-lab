@@ -1,11 +1,15 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { LlmEngineError } from '@agentops/llm-engine';
+import type { InvestigationAssistant, InvestigationOutcome } from '@agentops/types';
 import { loadCases, runEvals } from './runner.js';
 import type { EvalRunSummary } from './runner.js';
 
 /**
- * Integração do runner (teste 70 da techspec): `runEvals()` executa os 3 casos
- * reais pelo client MCP real (server spawnado via stdio) e o case-001 fecha em
- * score 1.0 com 0 termos proibidos; a saída traz o breakdown por caso (RF27).
+ * Integração do runner (teste 70 da techspec V1 + testes 36–38 da V2):
+ * `runEvals()` executa os 3 casos reais pelo client MCP real (server spawnado
+ * via stdio); o modo default permanece o da V1 e o modo llm aplica o
+ * `TextReportScorer` sobre o markdown do assistant (aqui, um fake — nenhum
+ * teste da suíte gasta tokens).
  */
 
 describe('runEvals() sobre os 3 casos', () => {
@@ -46,6 +50,126 @@ describe('runEvals() sobre os 3 casos', () => {
 
     // Progresso separado dos resultados (stderr ≠ stdout)
     expect(errLines.join('\n')).toContain('case-001-database-timeout');
+  }, 90_000);
+});
+
+/** Markdown roteirizado por caso: contrato de formato + findings do cenário. */
+function scriptedMarkdown(question: string): string {
+  if (question.includes('checkout-api')) {
+    return [
+      '## Resumo executivo',
+      'Pico de 5xx no checkout-api correlacionado ao deploy 2026.07.08-1 (esgotamento do connection pool).',
+      '## Evidências encontradas',
+      '1. DatabaseTimeoutException dominante em POST /checkout; p99 elevado após o deploy.',
+      '   Fonte: get_top_exceptions (exceptions[0])',
+      '## Hipótese principal',
+      'Regressão do deploy afetando o connection pool.',
+      '## Hipóteses alternativas',
+      '- Degradação do banco.',
+      '## Próximos passos seguros',
+      '1. Comparar o diff do deploy com a versão anterior.',
+      '## Dados faltantes',
+      '- Métricas internas do banco.',
+      '## Confiança da análise',
+      'alta',
+    ].join('\n');
+  }
+  if (question.includes('payment-api')) {
+    return [
+      '## Resumo executivo',
+      'Timeouts no payment-api causados por dependência externa.',
+      '## Evidências encontradas',
+      '1. PaymentGatewayTimeoutException em POST /payments; p99 acima do normal.',
+      '   Fonte: get_top_exceptions (exceptions[0])',
+      '## Hipótese principal',
+      'Instabilidade da dependência externa (gateway de pagamento).',
+      '## Hipóteses alternativas',
+      '- Saturação de rede.',
+      '## Próximos passos seguros',
+      '1. Verificar o status page do gateway.',
+      '## Dados faltantes',
+      '- Métricas do lado do gateway.',
+      '## Confiança da análise',
+      'media',
+    ].join('\n');
+  }
+  return [
+    '## Resumo executivo',
+    'Sem registros para o inventory-api na janela consultada.',
+    '## Evidências encontradas',
+    '## Hipótese principal',
+    'Nenhuma hipótese pôde ser formulada.',
+    '## Hipóteses alternativas',
+    'Nenhuma.',
+    '## Próximos passos seguros',
+    '1. Confirmar o nome do serviço e a janela consultada.',
+    '## Dados faltantes',
+    '- Sem registros de erro para o inventory-api.',
+    '- Sem métricas de latência para a janela.',
+    '## Confiança da análise',
+    'baixa',
+  ].join('\n');
+}
+
+class FakeLlmAssistant implements InvestigationAssistant {
+  async investigate(question: string): Promise<InvestigationOutcome> {
+    return { kind: 'markdown', markdown: scriptedMarkdown(question), audit: [] };
+  }
+}
+
+// Testes 36 (modo llm) e 37 + integração "eval runner com engine fake"
+describe('runEvals({ engine: "llm", assistant: fake }) sobre os 3 casos', () => {
+  it('aplica o TextReportScorer, imprime o breakdown e o resumo indica engine: llm', async () => {
+    const outLines: string[] = [];
+    const summary = await runEvals({
+      engine: 'llm',
+      assistant: new FakeLlmAssistant(),
+      out: (line) => outLines.push(line),
+      err: () => {},
+    });
+
+    expect(summary.engine).toBe('llm');
+    expect(summary.results).toHaveLength(3);
+    expect(summary.passedCount).toBe(3);
+    expect(summary.averageScore).toBe(1);
+
+    const output = outLines.join('\n');
+    // Breakdown por critério (RF27) vindo do TextReportScorer (linha "Fonte:")
+    expect(output).toContain('[OK] finding:DatabaseTimeoutException');
+    expect(output).toContain('[OK] cita_evidencias');
+    expect(output).toContain('[OK] proximos_passos_seguros');
+    // Resumo indica o engine usado
+    expect(output).toContain('Resumo: 3/3 caso(s) aprovado(s) · score médio 1.00 · engine: llm');
+  }, 90_000);
+});
+
+// Teste 36 (modo llm sem key): validação antes de qualquer spawn
+describe('runEvals({ engine: "llm" }) sem ANTHROPIC_API_KEY', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('falha rápido com missing_api_key, sem montar o assistant real', async () => {
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+
+    await expect(runEvals({ engine: 'llm', out: () => {}, err: () => {} })).rejects.toSatisfy(
+      (error: unknown) => error instanceof LlmEngineError && error.code === 'missing_api_key',
+    );
+  });
+});
+
+// Teste 38: clarification num caso (modo deterministic) → erro apontando o caso
+describe('outcome clarification num caso', () => {
+  it('gera erro orientativo apontando o caso e o campo faltante', async () => {
+    const clarifying: InvestigationAssistant = {
+      async investigate(): Promise<InvestigationOutcome> {
+        return { kind: 'clarification', missing: [{ field: 'window', hint: 'informe o período' }] };
+      },
+    };
+
+    await expect(runEvals({ assistant: clarifying, out: () => {}, err: () => {} })).rejects.toThrow(
+      /caso case-001-database-timeout: .*faltou: window.*corrija o campo "question"/,
+    );
   }, 90_000);
 });
 

@@ -1,14 +1,26 @@
+import { resolve } from 'node:path';
 import process from 'node:process';
-import { DeterministicInvestigationEngine, PtBrQuestionParser } from '@agentops/core';
-import type { ToolInvoker, ToolName } from '@agentops/types';
+import { fileURLToPath } from 'node:url';
+import { DeterministicInvestigationAssistant } from '@agentops/core';
+import {
+  AnthropicChatAdapter,
+  buildSystemPrompt,
+  LlmEngineError,
+  LlmInvestigationAssistant,
+  resolveLlmEngineConfig,
+} from '@agentops/llm-engine';
+import type { LlmEngineConfig } from '@agentops/llm-engine';
+import { ENGINE_KINDS } from '@agentops/types';
+import type { EngineKind, InvestigationAssistant, ToolInvoker, ToolName } from '@agentops/types';
 import { McpConnectionError, McpToolInvoker } from './mcp-tool-invoker.js';
-import { renderMissingFields, renderReport, renderUsage, shouldUseColor } from './renderer.js';
+import { renderMissingFields, renderOutcome, renderUsage, shouldUseColor } from './renderer.js';
 
 /**
- * Entrypoint de `npm run investigate -- "<pergunta>"` (RF1): interpreta a
- * pergunta, spawna o agentops-server via MCP stdio, executa o engine e imprime
- * o relatório. Progresso por etapa vai para stderr; o relatório final vai para
- * stdout — `> relatorio.txt` produz um arquivo limpo.
+ * Entrypoint de `npm run investigate -- [--engine=<kind>] "<pergunta>"` (RF1):
+ * spawna o agentops-server via MCP stdio, entrega a pergunta crua ao assistant
+ * do motor escolhido (`deterministic` por default; `llm` via flag ou env) e
+ * imprime o relatório. Progresso por etapa vai para stderr; o relatório final
+ * vai para stdout — `> relatorio.txt` produz um arquivo limpo.
  */
 
 /** Mensagem de progresso por tool (passos 2–8 da skill), exibida em stderr. */
@@ -38,24 +50,100 @@ function withProgress(inner: ToolInvoker): ToolInvoker {
   };
 }
 
+/** Valor de `--engine`/`AGENTOPS_ENGINE` fora de `ENGINE_KINDS` → uso + exit 1. */
+export class EngineArgError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EngineArgError';
+  }
+}
+
+/**
+ * Resolve o motor a partir de argv + env: `--engine=<kind>` vence
+ * `AGENTOPS_ENGINE`, e o default é `deterministic` (custo zero, sem API key).
+ * A flag é removida de `rest` — o que sobra é a pergunta. Compartilhada com o
+ * eval runner (mesma semântica nos dois comandos).
+ */
+export function resolveEngineArgs(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): { engine: EngineKind; rest: string[] } {
+  let engine: EngineKind | undefined;
+  const rest: string[] = [];
+
+  for (const arg of argv) {
+    if (arg === '--engine' || arg.startsWith('--engine=')) {
+      const value = arg.startsWith('--engine=') ? arg.slice('--engine='.length) : '';
+      if (!isEngineKind(value)) {
+        throw new EngineArgError(`--engine inválido: "${value}". Valores aceitos: ${ENGINE_KINDS.join(', ')}.`);
+      }
+      engine = value;
+      continue;
+    }
+    rest.push(arg);
+  }
+
+  if (engine === undefined) {
+    const fromEnv = env['AGENTOPS_ENGINE']?.trim();
+    if (fromEnv !== undefined && fromEnv !== '') {
+      if (!isEngineKind(fromEnv)) {
+        throw new EngineArgError(
+          `AGENTOPS_ENGINE inválida: "${fromEnv}". Valores aceitos: ${ENGINE_KINDS.join(', ')}.`,
+        );
+      }
+      engine = fromEnv;
+    }
+  }
+
+  return { engine: engine ?? 'deterministic', rest };
+}
+
+function isEngineKind(value: string): value is EngineKind {
+  return (ENGINE_KINDS as readonly string[]).includes(value);
+}
+
+/** `12437` → `12.4k` (linha de custo do modo llm em stderr). */
+export function formatTokenCount(count: number): string {
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
+}
+
 async function main(): Promise<number> {
   const useColor = shouldUseColor(process.stdout);
-  const question = process.argv.slice(2).join(' ').trim();
 
+  let engine: EngineKind;
+  let rest: string[];
+  try {
+    ({ engine, rest } = resolveEngineArgs(process.argv.slice(2), process.env));
+  } catch (error) {
+    if (error instanceof EngineArgError) {
+      process.stderr.write(`${error.message}\n\n${renderUsage()}`);
+      return 1;
+    }
+    throw error;
+  }
+
+  const question = rest.join(' ').trim();
   if (question === '') {
     process.stderr.write(renderUsage());
     return 1;
   }
 
-  // Passo 1 da skill — identificar serviço/janela/sintoma. Pergunta ambígua
-  // orienta e encerra sem chamar nenhuma tool (RF3/US10).
-  const parsed = new PtBrQuestionParser().parse(question);
-  if (!parsed.ok) {
-    process.stdout.write(renderMissingFields(parsed.missing, useColor));
-    return 0;
+  // Modo llm: config e system prompt resolvidos ANTES do spawn do server —
+  // missing_api_key, env inválida ou skill ausente falham rápido, sem
+  // processo filho órfão (fluxo de erro do PRD).
+  let llm: { config: LlmEngineConfig; systemPrompt: string } | null = null;
+  if (engine === 'llm') {
+    try {
+      llm = { config: resolveLlmEngineConfig(process.env), systemPrompt: buildSystemPrompt() };
+    } catch (error) {
+      if (error instanceof LlmEngineError) {
+        process.stderr.write(`${error.message}\n`);
+        return 1;
+      }
+      throw error;
+    }
   }
 
-  progress(`Investigando ${parsed.context.service} de ${parsed.context.window.from} a ${parsed.context.window.to}…`);
   progress('Iniciando o agentops-server (MCP via stdio)…');
 
   let invoker: McpToolInvoker;
@@ -71,11 +159,46 @@ async function main(): Promise<number> {
   }
 
   try {
-    const engine = new DeterministicInvestigationEngine();
-    const report = await engine.investigate(parsed.context, withProgress(invoker));
+    let assistant: InvestigationAssistant;
+    let llmAssistant: LlmInvestigationAssistant | null = null;
+    if (llm !== null) {
+      llmAssistant = new LlmInvestigationAssistant(
+        AnthropicChatAdapter.fromApiKey(llm.config.apiKey),
+        () => invoker.listTools(),
+        llm.config,
+        llm.systemPrompt,
+        { onRound: (round, maxRounds) => progress(`Consultando o modelo (rodada ${round}/${maxRounds})…`) },
+      );
+      assistant = llmAssistant;
+    } else {
+      assistant = new DeterministicInvestigationAssistant();
+    }
+
+    const outcome = await assistant.investigate(question, withProgress(invoker));
+
+    // Pergunta ambígua orienta e encerra sem chamar nenhuma tool (RF3/US10).
+    if (outcome.kind === 'clarification') {
+      process.stdout.write(renderMissingFields(outcome.missing, useColor));
+      return 0;
+    }
+
     progress('Montando o relatório…');
-    process.stdout.write(renderReport(report, useColor));
+    process.stdout.write(renderOutcome(outcome, useColor));
+
+    // Visibilidade de custo por investigação (modo llm): agregado em stderr.
+    const usage = llmAssistant?.lastUsage;
+    if (usage !== undefined && usage !== null) {
+      progress(
+        `Tokens: ${formatTokenCount(usage.inputTokens)} entrada · ${formatTokenCount(usage.outputTokens)} saída · ${usage.rounds} rodada(s)`,
+      );
+    }
     return 0;
+  } catch (error) {
+    if (error instanceof LlmEngineError) {
+      process.stderr.write(`A investigação falhou: ${error.message}\n`);
+      return 1;
+    }
+    throw error;
   } finally {
     await invoker.close().catch(() => {
       // Encerramento do processo filho é melhor esforço: o relatório já saiu.
@@ -83,13 +206,17 @@ async function main(): Promise<number> {
   }
 }
 
-main().then(
-  (code) => {
-    process.exitCode = code;
-  },
-  (error: unknown) => {
-    // Nunca stack trace cru para o usuário (fluxo de erro do PRD).
-    process.stderr.write(`A investigação falhou: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  },
-);
+const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (invokedDirectly) {
+  main().then(
+    (code) => {
+      process.exitCode = code;
+    },
+    (error: unknown) => {
+      // Nunca stack trace cru para o usuário (fluxo de erro do PRD).
+      process.stderr.write(`A investigação falhou: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    },
+  );
+}

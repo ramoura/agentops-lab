@@ -2,19 +2,29 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { EngineArgError, resolveEngineArgs } from '@agentops/cli-agent/main';
 import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
 import { renderReport } from '@agentops/cli-agent/renderer';
-import { DeterministicInvestigationEngine, PtBrQuestionParser } from '@agentops/core';
+import { DeterministicInvestigationAssistant } from '@agentops/core';
+import {
+  AnthropicChatAdapter,
+  buildSystemPrompt,
+  LlmInvestigationAssistant,
+  resolveLlmEngineConfig,
+} from '@agentops/llm-engine';
 import { evalCaseSchema } from '@agentops/types';
-import type { EvalCase, EvalCaseResult } from '@agentops/types';
+import type { EngineKind, EvalCase, EvalCaseResult, InvestigationAssistant } from '@agentops/types';
 import { DeterministicEvalScorer } from '../scoring/scorer.js';
+import { TextReportScorer } from '../scoring/text-scorer.js';
 
 /**
- * Runner do eval harness (`npm run eval`, RF23): carrega `cases/*.json`,
- * executa cada investigação pelo MESMO caminho da CLI — client MCP real via
- * stdio (`McpToolInvoker`) + engine determinístico + renderer — e pontua com o
- * scorer determinístico, imprimindo o breakdown de critérios por caso (RF27)
- * e o resumo agregado. Progresso vai para stderr; resultados para stdout.
+ * Runner do eval harness (`npm run eval -- [--engine=<kind>]`, RF23): carrega
+ * `cases/*.json`, executa cada investigação pelo MESMO caminho da CLI — client
+ * MCP real via stdio (`McpToolInvoker`) + assistant do motor escolhido — e
+ * pontua deterministicamente (RF26): `DeterministicEvalScorer` sobre o report
+ * estruturado no modo default, `TextReportScorer` sobre as seções do markdown
+ * no modo llm. Imprime o breakdown de critérios por caso (RF27) e o resumo
+ * agregado com o engine usado. Progresso vai para stderr; resultados para stdout.
  */
 
 const DEFAULT_CASES_DIR = fileURLToPath(new URL('../cases', import.meta.url));
@@ -25,9 +35,18 @@ export interface EvalRunSummary {
   passedCount: number;
   /** Média dos scores por caso, 2 casas. */
   averageScore: number;
+  /** Motor usado na execução (indicado na linha de resumo). */
+  engine: EngineKind;
 }
 
 export interface RunEvalsOptions {
+  /** Motor de investigação (default: `deterministic` — grátis, é o que a CI roda). */
+  engine?: EngineKind;
+  /**
+   * Assistant injetável (testes): substitui a montagem padrão do motor.
+   * No modo llm dispensa a `ANTHROPIC_API_KEY`.
+   */
+  assistant?: InvestigationAssistant;
   /** Diretório dos casos (default: `evals/cases/`). */
   casesDir?: string;
   /** Destino dos resultados (default: stdout). */
@@ -47,36 +66,61 @@ export async function loadCases(casesDir: string = DEFAULT_CASES_DIR): Promise<E
   return cases;
 }
 
+/**
+ * Monta o assistant do motor escolhido. No modo llm, config e system prompt
+ * são resolvidos ANTES do spawn do server (mesma validação e mensagem da CLI:
+ * `missing_api_key` falha rápido, sem processo filho órfão).
+ */
+function buildAssistant(engine: EngineKind, invoker: () => McpToolInvoker): InvestigationAssistant {
+  if (engine === 'llm') {
+    const config = resolveLlmEngineConfig(process.env);
+    return new LlmInvestigationAssistant(
+      AnthropicChatAdapter.fromApiKey(config.apiKey),
+      () => invoker().listTools(),
+      config,
+      buildSystemPrompt(),
+    );
+  }
+  return new DeterministicInvestigationAssistant();
+}
+
 /** Executa todos os casos e imprime score por caso + resumo agregado (RF23/RF27). */
 export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSummary> {
   const out = options.out ?? ((line: string) => process.stdout.write(`${line}\n`));
   const err = options.err ?? ((line: string) => process.stderr.write(`${line}\n`));
+  const engine = options.engine ?? 'deterministic';
 
   const cases = await loadCases(options.casesDir);
   err(`Executando ${cases.length} caso(s) de eval…`);
 
-  const parser = new PtBrQuestionParser();
-  const engine = new DeterministicInvestigationEngine();
-  const scorer = new DeterministicEvalScorer();
+  // Validação do modo llm (API key, skill) antes de spawnar o server.
+  let invoker: McpToolInvoker;
+  const assistant = options.assistant ?? buildAssistant(engine, () => invoker);
+
+  const deterministicScorer = new DeterministicEvalScorer();
+  const textScorer = new TextReportScorer();
 
   err('Iniciando o agentops-server (MCP via stdio)…');
-  const invoker = await McpToolInvoker.connect({ serverStderr: 'inherit' });
+  invoker = await McpToolInvoker.connect({ serverStderr: 'inherit' });
 
   const results: EvalCaseResult[] = [];
   try {
     for (const evalCase of cases) {
       err(`→ ${evalCase.id}`);
-      const parsed = parser.parse(evalCase.question);
-      if (!parsed.ok) {
+      const outcome = await assistant.investigate(evalCase.question, invoker);
+      if (outcome.kind === 'clarification') {
         throw new Error(
-          `caso ${evalCase.id}: a pergunta não pôde ser interpretada (faltou: ${parsed.missing
+          `caso ${evalCase.id}: a pergunta não pôde ser interpretada (faltou: ${outcome.missing
             .map((item) => item.field)
             .join(', ')}) — corrija o campo "question" do caso.`,
         );
       }
-      const report = await engine.investigate(parsed.context, invoker);
-      const rendered = renderReport(report, false);
-      const result = scorer.score(evalCase, report, rendered);
+      // Scoring 100% determinístico nos dois modos (RF26): report estruturado
+      // → scorer da V1 (byte-idêntico); markdown do LLM → scorer text-mode.
+      const result =
+        outcome.kind === 'report'
+          ? deterministicScorer.score(evalCase, outcome.report, renderReport(outcome.report, false))
+          : textScorer.score(evalCase, outcome.markdown);
       results.push(result);
       printCaseResult(result, out);
     }
@@ -91,9 +135,9 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
     results.length === 0 ? 0 : Math.round((results.reduce((sum, result) => sum + result.score, 0) / results.length) * 100) / 100;
 
   out('');
-  out(`Resumo: ${passedCount}/${results.length} caso(s) aprovado(s) · score médio ${averageScore.toFixed(2)}`);
+  out(`Resumo: ${passedCount}/${results.length} caso(s) aprovado(s) · score médio ${averageScore.toFixed(2)} · engine: ${engine}`);
 
-  return { results, passedCount, averageScore };
+  return { results, passedCount, averageScore, engine };
 }
 
 /** Score do caso + breakdown critério a critério — não apenas o agregado (RF27). */
@@ -109,15 +153,32 @@ function printCaseResult(result: EvalCaseResult, out: (line: string) => void): v
 
 const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
+function resolveCliEngine(): EngineKind | null {
+  try {
+    return resolveEngineArgs(process.argv.slice(2), process.env).engine;
+  } catch (error) {
+    if (error instanceof EngineArgError) {
+      process.stderr.write(`${error.message}\nUso: npm run eval -- [--engine=deterministic|llm]\n`);
+      return null;
+    }
+    throw error;
+  }
+}
+
 if (invokedDirectly) {
-  runEvals().then(
-    (summary) => {
-      process.exitCode = summary.passedCount === summary.results.length ? 0 : 1;
-    },
-    (error: unknown) => {
-      // Nunca stack trace cru para o usuário (fluxo de erro do PRD).
-      process.stderr.write(`O eval falhou: ${error instanceof Error ? error.message : String(error)}\n`);
-      process.exitCode = 1;
-    },
-  );
+  const engine = resolveCliEngine();
+  if (engine === null) {
+    process.exitCode = 1;
+  } else {
+    runEvals({ engine }).then(
+      (summary) => {
+        process.exitCode = summary.passedCount === summary.results.length ? 0 : 1;
+      },
+      (error: unknown) => {
+        // Nunca stack trace cru para o usuário (fluxo de erro do PRD).
+        process.stderr.write(`O eval falhou: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.exitCode = 1;
+      },
+    );
+  }
 }

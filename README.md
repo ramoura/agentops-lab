@@ -12,11 +12,17 @@ MCP/tools para acessar sistemas
 + Segurança read-only para operação real
 ```
 
-A v1 usa **dados simulados** e um **engine determinístico** (sem LLM em runtime): roda 100% offline, sem API key, com saída reproduzível — pré-requisito do eval determinístico. A arquitetura está preparada para evoluir para um motor LLM (V2) e integrações reais de observabilidade (V3) — ver [`docs/roadmap.md`](./docs/roadmap.md).
+O lab tem **dois motores de investigação** selecionáveis por `--engine`:
+
+- **`deterministic`** (default, da V1): parser + pipeline determinístico, sem LLM em runtime — roda 100% offline, sem API key, com saída reproduzível (pré-requisito do eval determinístico).
+- **`llm`** (V2): loop agêntico manual sobre a **Messages API da Anthropic**, consumindo as **mesmas 9 MCP tools** — a skill vira system prompt e o modelo decide quais tools chamar. Requer `ANTHROPIC_API_KEY`.
+
+Integrações reais de observabilidade são a V3 — ver [`docs/roadmap.md`](./docs/roadmap.md).
 
 ## Requisitos
 
-- Node.js ≥ 20 (sem nenhuma infraestrutura externa: sem cloud, sem banco, sem API key)
+- Node.js ≥ 20 (sem nenhuma infraestrutura externa: sem cloud, sem banco)
+- `ANTHROPIC_API_KEY` **apenas** para o modo `--engine=llm` — o default continua funcionando sem key e sem custo
 
 ## Instalação
 
@@ -49,6 +55,33 @@ Comportamentos úteis:
 
 Cenários simulados disponíveis: `checkout-api` (incidente principal, 10h–10h30 de 2026-07-08), `payment-api` (timeout de gateway, 14h–14h20) e qualquer outro serviço para exercitar o fluxo de dados ausentes.
 
+## Modo LLM (`--engine=llm`)
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run investigate -- --engine=llm "Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08"
+```
+
+No modo llm não há parser: a pergunta crua vai para o modelo com a skill [`investigate-incident`](./skills/investigate-incident/skill.md) como system prompt e as definições das 9 tools descobertas em runtime via `listTools()` do MCP. O loop agêntico é manual (`while stop_reason === 'tool_use'`) — cada rodada, tool_use e tool_result é visível e auditável, que é exatamente o objeto de estudo do lab. Perguntas mais livres que o regex da V1 passam a funcionar; pergunta sem serviço/período identificáveis produz um markdown declarando o que faltou, sem chamar tools de dados.
+
+- O relatório em stdout é o **markdown do modelo** (mesmas 7 seções do RF4) + a seção **"Tools chamadas" anexada por código** a partir do audit log — a auditoria nunca depende da honestidade do modelo.
+- Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 12.4k entrada · 1.8k saída · 3 rodadas`) vão para stderr; stdout redirecionado permanece limpo.
+- Sem `ANTHROPIC_API_KEY`, a CLI falha rápido com orientação (exit 1), **antes** de spawnar o server MCP.
+
+Variáveis de ambiente:
+
+| Variável | Default | Uso |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | — | Obrigatória apenas no modo `llm`. Nunca aparece em logs, relatório ou auditoria. |
+| `AGENTOPS_ENGINE` | `deterministic` | Motor default quando `--engine` não é passado (CLI e eval). |
+| `AGENTOPS_LLM_MODEL` | `claude-sonnet-5` | Modelo da Messages API. |
+| `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
+| `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
+
+**Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). `temperature` é fixa em `0` para maximizar a reprodutibilidade. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
+
+**Gap do RF6 como objeto de estudo**: no motor determinístico, "nenhum fato fora de tool" é garantido por código; no modo llm o modelo *pode* alucinar um fato — a garantia vira instrução de prompt. As mitigações são em camadas (guardrails no system prompt, linha `Fonte:` obrigatória por evidência, `must_not_include` nos casos de eval e auditoria completa para conferência manual tool a tool), e observar esse gap na prática é parte do propósito do lab.
+
 ## Rodar os evals
 
 ```bash
@@ -62,7 +95,16 @@ Executa os 3 casos de `evals/cases/` pelo **mesmo caminho da CLI** (client MCP r
 - `separa_fato_de_hipotese` — seções distintas e não vazias (ou ausência declarada);
 - `proximos_passos_seguros` — lista não vazia, 1º passo nunca destrutivo.
 
-A saída traz o breakdown de critérios por caso (o que passou e o que falhou) e o resumo agregado. O eval é o monitor de regressão do projeto: mudanças em engine/datasets/skill devem manter o `case-001` em 100%. Exit code ≠ 0 quando algum caso reprova.
+A saída traz o breakdown de critérios por caso (o que passou e o que falhou) e o resumo agregado, indicando o engine usado. O eval é o monitor de regressão do projeto: mudanças em engine/datasets/skill devem manter o `case-001` em 100%. Exit code ≠ 0 quando algum caso reprova.
+
+Os dois motores rodam pelos mesmos casos:
+
+```bash
+npm run eval -- --engine=llm   # pontua o markdown do modelo com o TextReportScorer
+npm run eval:llm               # atalho: alias de --engine=llm (smoke opt-in, gasta tokens)
+```
+
+No modo llm o scoring continua 100% determinístico: o `TextReportScorer` avalia os **mesmos 5 grupos de critérios** sobre as seções do markdown (extraídas por título — sublinhado ou `##`), sem LLM-as-judge. Os casos JSON são byte-idênticos aos da V1.
 
 ## Testes e cobertura
 
@@ -82,6 +124,7 @@ agentops-lab/
     types/                       # contratos TS + schemas Zod (fonte única)
     providers/                   # fake providers (fs read-only) — substituíveis por reais
     core/                        # parser de pergunta, engine determinístico, audit log
+    llm-engine/                  # motor LLM: loop agêntico sobre a Messages API (V2)
   evals/                         # eval harness: cases/, expected-answers/, scoring/, runner
   datasets/                      # logs/métricas/deploys fake (JSON/JSONL versionados)
   knowledge-base/                # runbooks, ADRs e tech specs simulados
@@ -119,7 +162,7 @@ O padrão completo está na skill [`desenvolver-mcp-tools`](./.claude/skills/des
 ### Adicionar uma skill
 
 1. Crie `skills/<nome>/skill.md` com as seções: objetivo, quando usar, processo, regras e saída esperada.
-2. Para o engine determinístico da v1, espelhe o processo em um pipeline no `packages/core` (como `DeterministicInvestigationEngine` espelha os 11 passos de `investigate-incident`). Na V2 (motor LLM), a skill passa a ser carregada como contexto.
+2. Para o engine determinístico da v1, espelhe o processo em um pipeline no `packages/core` (como `DeterministicInvestigationEngine` espelha os 11 passos de `investigate-incident`). No motor LLM, a skill é carregada como contexto do modelo (`prompt-builder` em `packages/llm-engine`).
 
 ### Adicionar um caso de eval
 

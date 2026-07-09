@@ -9,7 +9,8 @@
       "Bash(node *)",
       "Bash(npx vitest *)",
       "Bash(npm install *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(env -u ANTHROPIC_API_KEY npm run test:coverage)"
     ]
   }
 }
