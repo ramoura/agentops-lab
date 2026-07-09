@@ -44,14 +44,17 @@ export class LlmEngineError extends Error {
   }
 }
 
-/** Configuração resolvida do motor LLM (uma única vez, a partir do ambiente). */
+/**
+ * Configuração resolvida do motor LLM (uma única vez, a partir do ambiente).
+ * Sem parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos
+ * da Messages API nos modelos atuais (claude-sonnet-5+) — enviar qualquer um
+ * retorna 400 `invalid_request_error`.
+ */
 export interface LlmEngineConfig {
   apiKey: string;
   model: string;
   maxTokens: number;
   maxRounds: number;
-  /** Fixo em 0 na V2 (não configurável): maximiza reprodutibilidade para o eval. */
-  temperature: 0;
 }
 
 export const DEFAULT_LLM_MODEL = 'claude-sonnet-5';
@@ -82,7 +85,6 @@ export function resolveLlmEngineConfig(env: NodeJS.ProcessEnv = process.env): Ll
     model,
     maxTokens: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_TOKENS', DEFAULT_LLM_MAX_TOKENS),
     maxRounds: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_ROUNDS', DEFAULT_LLM_MAX_ROUNDS),
-    temperature: 0,
   };
 }
 

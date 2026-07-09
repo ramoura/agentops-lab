@@ -12,7 +12,6 @@ import type { ChatRequest, MessagesApi } from './anthropic-chat.js';
 const REQUEST: ChatRequest = {
   model: 'claude-sonnet-5',
   max_tokens: 4096,
-  temperature: 0,
   system: 'prompt de sistema',
   tools: [{ name: 'get_error_summary', description: 'desc', input_schema: { type: 'object' } }],
   tool_choice: { type: 'auto' },
@@ -36,19 +35,20 @@ function fakeMessages(response: Partial<Anthropic.Message>): MessagesApi & { par
 }
 
 describe('AnthropicChatAdapter', () => {
-  it('repassa os parâmetros da requisição para messages.create() sem alteração', async () => {
+  it('repassa os parâmetros da requisição para messages.create() sem alteração (e sem sampling params)', async () => {
     const messages = fakeMessages({});
     await new AnthropicChatAdapter(messages).create(REQUEST);
 
     expect(messages.params[0]).toEqual({
       model: 'claude-sonnet-5',
       max_tokens: 4096,
-      temperature: 0,
       system: 'prompt de sistema',
       tools: REQUEST.tools,
       tool_choice: { type: 'auto' },
       messages: REQUEST.messages,
     });
+    // temperature/top_p/top_k retornam 400 nos modelos atuais — nunca enviados
+    expect(messages.params[0]).not.toHaveProperty('temperature');
   });
 
   it('mapeia blocos text e tool_use da resposta, ignorando tipos desconhecidos', async () => {

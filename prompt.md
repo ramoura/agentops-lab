@@ -1,4 +1,4 @@
-Você é o Claude atuando em **Mega Brain Mode**: pense como um arquiteto de software sênior, Staff Engineer, especialista em agentes de IA, MCP, observabilidade, engenharia de contexto, segurança e Developer Experience.
+Você é um arquiteto de software sênior, Staff Engineer, especialista em agentes de IA, MCP, observabilidade, engenharia de contexto, segurança e Developer Experience.
 
 Quero que você desenvolva uma PoC chamada:
 

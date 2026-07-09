@@ -33,14 +33,13 @@ describe('resolveLlmEngineConfig', () => {
   });
 
   // Teste 18 — defaults
-  it('aplica os defaults da techspec (claude-sonnet-5, 4096, 16, temperature 0)', () => {
+  it('aplica os defaults da techspec (claude-sonnet-5, 4096, 16)', () => {
     const config = resolveLlmEngineConfig({ ANTHROPIC_API_KEY: 'sk-ant-teste' });
     expect(config).toEqual({
       apiKey: 'sk-ant-teste',
       model: DEFAULT_LLM_MODEL,
       maxTokens: DEFAULT_LLM_MAX_TOKENS,
       maxRounds: DEFAULT_LLM_MAX_ROUNDS,
-      temperature: 0,
     });
     expect(config.model).toBe('claude-sonnet-5');
     expect(config.maxTokens).toBe(4096);
@@ -58,7 +57,6 @@ describe('resolveLlmEngineConfig', () => {
     expect(config.model).toBe('claude-opus-4-8');
     expect(config.maxTokens).toBe(8192);
     expect(config.maxRounds).toBe(4);
-    expect(config.temperature).toBe(0);
   });
 
   // Teste 18 — valores inválidos
