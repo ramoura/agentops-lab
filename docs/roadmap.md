@@ -47,6 +47,16 @@ Terceiro adapter (`AgentSdkInvestigationAssistant`) usando o `@anthropic-ai/clau
 - **Trade-off central** (registrado em [`decisions.md`](./decisions.md) D9): o loop deixa de ser visível — rodadas, tool_use/tool_result e auditoria passam a depender dos hooks do Agent SDK; o audit log estrutural (RF7) precisa ser reimplementado sobre esses hooks e validado pelo eval.
 - **Custo/benefício**: como substituto da API não compensa (uma investigação da V2 custa centavos — ~57k tokens de entrada); como experimento de comparação de harnesses, é a pergunta mais interessante do roadmap V2.x.
 
+### V2.4 — Provedores alternativos: OpenRouter / OpenAI (adapter OpenAI-compatible)
+
+Quarto adapter atrás da mesma interface `InvestigationAssistant`, falando o dialeto **OpenAI-compatible** (`chat/completions`). Um único adapter cobre OpenRouter, OpenAI e dezenas de provedores (Groq, Together, Ollama local…) — muda só `baseURL` + key; o OpenRouter inclusive serve os próprios modelos Claude por essa via. Seleção por `AGENTOPS_LLM_PROVIDER=anthropic|openrouter|openai` + `AGENTOPS_LLM_MODEL`, mantendo Anthropic como default.
+
+- **O que muda**: o loop da V2 é anthropic-shaped — blocos `tool_use`/`tool_result` viram `tool_calls[]` + mensagens `role: "tool"` com `tool_call_id`; `stop_reason` vira `finish_reason`; schema de tool ganha o envelope `{type: "function", function: {...}}`; `system` vira mensagem `role: "system"`. Caminho recomendado: novo workspace `packages/openai-engine` espelhando o padrão do `llm-engine` (porta fina `OpenAiChatPort` + fake nos testes, zero tokens na suíte default). O mapeamento MCP → tools continua passthrough (ambos usam JSON Schema).
+- **O que não muda**: server/tools MCP, `McpToolInvoker`, audit log, skill, contrato de formato, `TextReportScorer`, eval e CLI (além da seleção de provider).
+- **Pergunta de AgentOps (o benefício real)**: transformar o lab numa **bancada de comparação de modelos** — mesmos 3 casos, mesmas tools, mesmo scorer determinístico, medindo por modelo: aderência ao contrato de formato, citação de fontes, segurança dos próximos passos, rodadas e tokens gastos. Economia é secundária: a investigação típica custa centavos no `claude-sonnet-5`; modelos abertos via OpenRouter (DeepSeek, Qwen, Llama) custam 10–50× menos, com taxa de ~5% na compra de créditos.
+- **Riscos**: qualidade de tool calling varia muito entre modelos (o `TextReportScorer` existe para acusar isso); dois dialetos de API para manter frente a upstreams que evoluem (o caso do `temperature` da V2 aconteceria em dobro); prompt caching difere por provedor (explícito na Anthropic, automático na OpenAI, dependente do provedor no OpenRouter) — relevante porque o loop reenvia o histórico a cada rodada; OpenRouter adiciona um terceiro na cadeia de dados.
+- **Registrar em `decisions.md`**: adapter dedicado por dialeto (em vez de generalizar a porta da V2 para um formato neutro) e o trade-off assumido.
+
 ## V3 — Providers reais de observabilidade
 
 - Implementar `ObservabilityProvider` para CloudWatch, Splunk, Prometheus e/ou OpenTelemetry — **sem tocar no contrato das tools** (RF11).
