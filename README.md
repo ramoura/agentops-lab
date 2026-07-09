@@ -78,7 +78,7 @@ Variáveis de ambiente:
 | `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
 | `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
 
-**Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). `temperature` é fixa em `0` para maximizar a reprodutibilidade. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
+**Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). O motor não envia parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos da Messages API nos modelos atuais (`claude-sonnet-5`+) e retornam 400 se enviados — a reprodutibilidade do modo llm depende do contrato de formato no prompt, não de sampling. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
 
 **Gap do RF6 como objeto de estudo**: no motor determinístico, "nenhum fato fora de tool" é garantido por código; no modo llm o modelo *pode* alucinar um fato — a garantia vira instrução de prompt. As mitigações são em camadas (guardrails no system prompt, linha `Fonte:` obrigatória por evidência, `must_not_include` nos casos de eval e auditoria completa para conferência manual tool a tool), e observar esse gap na prática é parte do propósito do lab.
 

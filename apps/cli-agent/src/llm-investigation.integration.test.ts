@@ -21,7 +21,6 @@ const CONFIG: LlmEngineConfig = {
   model: 'claude-sonnet-5',
   maxTokens: 4096,
   maxRounds: 16,
-  temperature: 0,
 };
 
 let invoker: McpToolInvoker;

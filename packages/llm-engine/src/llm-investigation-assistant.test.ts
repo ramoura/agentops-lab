@@ -28,7 +28,6 @@ const CONFIG: LlmEngineConfig = {
   model: 'claude-sonnet-5',
   maxTokens: 4096,
   maxRounds: 16,
-  temperature: 0,
 };
 
 function stubResponses(): Partial<Record<ToolName, StubResponse>> {
@@ -272,7 +271,7 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
   });
 
   // Teste 12
-  it('requisição enviada: model, max_tokens, temperature 0, system e tools conforme config/definições; tool_choice auto', async () => {
+  it('requisição enviada: model, max_tokens, system e tools conforme config/definições; tool_choice auto; sem sampling params', async () => {
     const chat = new FakeAnthropicChat([endTurn(MARKDOWN)]);
 
     await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker({}));
@@ -281,10 +280,11 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
     expect(request).toMatchObject({
       model: 'claude-sonnet-5',
       max_tokens: 4096,
-      temperature: 0,
       system: SYSTEM_PROMPT,
       tool_choice: { type: 'auto' },
     });
+    // temperature/top_p/top_k foram removidos da API (claude-sonnet-5+) — 400 se enviados
+    expect(request).not.toHaveProperty('temperature');
     // Tools: as 9 definições MCP mapeadas (inputSchema → input_schema)
     const definitions = mcpDefinitions();
     expect(request?.tools.map((tool) => tool.name)).toEqual(definitions.map((definition) => definition.name));

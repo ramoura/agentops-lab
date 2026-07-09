@@ -60,7 +60,6 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
         response = await this.chat.create({
           model: this.config.model,
           max_tokens: this.config.maxTokens,
-          temperature: this.config.temperature,
           system: this.systemPrompt,
           tools: anthropicTools,
           tool_choice: { type: 'auto' },

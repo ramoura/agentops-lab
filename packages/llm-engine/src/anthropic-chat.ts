@@ -23,11 +23,14 @@ export type ChatMessage =
   | { role: 'user'; content: UserContentBlock[] }
   | { role: 'assistant'; content: AssistantContentBlock[] };
 
-/** Espelho tipado dos parâmetros de `messages.create()` usados pelo motor. */
+/**
+ * Espelho tipado dos parâmetros de `messages.create()` usados pelo motor.
+ * Sem `temperature`/`top_p`/`top_k`: os parâmetros de sampling foram removidos
+ * da API nos modelos atuais (claude-sonnet-5+) e retornam 400 se enviados.
+ */
 export interface ChatRequest {
   model: string;
   max_tokens: number;
-  temperature: number;
   system: string;
   tools: AnthropicToolDefinition[];
   tool_choice: { type: 'auto' };
@@ -74,7 +77,6 @@ export class AnthropicChatAdapter implements AnthropicChatPort {
     const response = await this.messages.create({
       model: request.model,
       max_tokens: request.max_tokens,
-      temperature: request.temperature,
       system: request.system,
       tools: request.tools as unknown as Anthropic.ToolUnion[],
       tool_choice: request.tool_choice,
