@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EngineArgError, formatTokenCount, resolveEngineArgs } from './main.js';
+import { EngineArgError, formatTokenCount, formatUsageLine, resolveEngineArgs } from './main.js';
 
 /**
  * Unitários de `resolveEngineArgs` (teste 23 da techspec V2): seleção de motor
@@ -69,5 +69,48 @@ describe('formatTokenCount', () => {
     expect(formatTokenCount(12437)).toBe('12.4k');
     expect(formatTokenCount(1800)).toBe('1.8k');
     expect(formatTokenCount(999)).toBe('999');
+  });
+});
+
+// Testes 17–19 (techspec V2.5): linha de custo com detalhe de cache
+describe('formatUsageLine', () => {
+  // Teste 17
+  it('cache > 0 → detalhe de cache lido/escrito entre parênteses', () => {
+    const line = formatUsageLine({
+      inputTokens: 3900,
+      outputTokens: 5100,
+      cacheReadTokens: 44200,
+      cacheCreationTokens: 9200,
+      rounds: 5,
+    });
+
+    expect(line).toBe('Tokens: 3.9k entrada (44.2k cache lido · 9.2k cache escrito) · 5.1k saída · 5 rodada(s)');
+  });
+
+  // Teste 18
+  it('cache == 0 → formato da V2 preservado, sem parêntese vazio', () => {
+    const line = formatUsageLine({
+      inputTokens: 57300,
+      outputTokens: 5100,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      rounds: 5,
+    });
+
+    expect(line).toBe('Tokens: 57.3k entrada · 5.1k saída · 5 rodada(s)');
+  });
+
+  // Teste 19
+  it('campos de cache usam a mesma formatação de formatTokenCount (12.4k)', () => {
+    const line = formatUsageLine({
+      inputTokens: 500,
+      outputTokens: 900,
+      cacheReadTokens: 12437,
+      cacheCreationTokens: 999,
+      rounds: 2,
+    });
+
+    expect(line).toContain(`(${formatTokenCount(12437)} cache lido · ${formatTokenCount(999)} cache escrito)`);
+    expect(line).toBe('Tokens: 500 entrada (12.4k cache lido · 999 cache escrito) · 900 saída · 2 rodada(s)');
   });
 });

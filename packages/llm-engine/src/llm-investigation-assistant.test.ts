@@ -4,12 +4,14 @@ import type { ToolName } from '@agentops/types';
 import {
   endTurn,
   FakeAnthropicChat,
+  makeUsage,
   mcpDefinitions,
   StubToolInvoker,
   toolUseBlock,
   toolUseRound,
 } from './__fixtures__/testing.js';
 import type { StubResponse } from './__fixtures__/testing.js';
+import type { AssistantContentBlock, ChatRequest, UserContentBlock } from './anthropic-chat.js';
 import { LlmEngineError } from './engine-config.js';
 import type { LlmEngineConfig } from './engine-config.js';
 import { LlmInvestigationAssistant } from './llm-investigation-assistant.js';
@@ -28,6 +30,7 @@ const CONFIG: LlmEngineConfig = {
   model: 'claude-sonnet-5',
   maxTokens: 4096,
   maxRounds: 16,
+  cacheEnabled: true,
 };
 
 function stubResponses(): Partial<Record<ToolName, StubResponse>> {
@@ -76,6 +79,9 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
           type: 'tool_result',
           tool_use_id: 'toolu_1',
           content: JSON.stringify({ totalRequests: 412, count5xx: 87 }),
+          // Marker móvel da V2.5 (cache ligado no CONFIG): metadado do bloco,
+          // o conteúdo do tool_result permanece intacto
+          cache_control: { type: 'ephemeral' },
         },
       ],
     });
@@ -148,7 +154,13 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
     const outcome = await makeAssistant(chat).investigate(QUESTION, stub);
 
     expect(chat.requests[1]?.messages[2]?.content).toEqual([
-      { type: 'tool_result', tool_use_id: 'toolu_1', content: 'timeout do provider', is_error: true },
+      {
+        type: 'tool_result',
+        tool_use_id: 'toolu_1',
+        content: 'timeout do provider',
+        is_error: true,
+        cache_control: { type: 'ephemeral' },
+      },
     ]);
     expect(outcome).toMatchObject({ kind: 'markdown', markdown: MARKDOWN });
   });
@@ -233,7 +245,7 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
   // Teste 9
   it("stop_reason 'max_tokens' → LlmEngineError(max_tokens_reached)", async () => {
     const chat = new FakeAnthropicChat([
-      { content: [{ type: 'text', text: 'relatório trunca…' }], stop_reason: 'max_tokens', usage: { input_tokens: 10, output_tokens: 4096 } },
+      { content: [{ type: 'text', text: 'relatório trunca…' }], stop_reason: 'max_tokens', usage: makeUsage({ input_tokens: 10, output_tokens: 4096 }) },
     ]);
 
     await expect(makeAssistant(chat).investigate(QUESTION, new StubToolInvoker({}))).rejects.toMatchObject({
@@ -246,7 +258,7 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
   // Teste 10
   it('end_turn sem bloco de texto → LlmEngineError(empty_response)', async () => {
     const chat = new FakeAnthropicChat([
-      { content: [], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 0 } },
+      { content: [], stop_reason: 'end_turn', usage: makeUsage({ input_tokens: 10, output_tokens: 0 }) },
     ]);
 
     await expect(makeAssistant(chat).investigate(QUESTION, new StubToolInvoker({}))).rejects.toMatchObject({
@@ -280,7 +292,7 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
     expect(request).toMatchObject({
       model: 'claude-sonnet-5',
       max_tokens: 4096,
-      system: SYSTEM_PROMPT,
+      system: [{ type: 'text', text: SYSTEM_PROMPT }],
       tool_choice: { type: 'auto' },
     });
     // temperature/top_p/top_k foram removidos da API (claude-sonnet-5+) — 400 se enviados
@@ -297,8 +309,10 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
 
     await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker({}));
 
+    // Com cache ligado (default), o único bloco da pergunta carrega o marker
+    // móvel — metadado do bloco; o texto permanece cru.
     expect(chat.requests[0]?.messages).toEqual([
-      { role: 'user', content: [{ type: 'text', text: QUESTION }] },
+      { role: 'user', content: [{ type: 'text', text: QUESTION, cache_control: { type: 'ephemeral' } }] },
     ]);
   });
 
@@ -323,10 +337,225 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
     expect(assistant.lastUsage).toBeNull();
     await assistant.investigate(QUESTION, new StubToolInvoker(stubResponses()));
 
-    expect(assistant.lastUsage).toEqual({ inputTokens: 2500, outputTokens: 500, rounds: 2 });
+    expect(assistant.lastUsage).toEqual({
+      inputTokens: 2500,
+      outputTokens: 500,
+      cacheReadTokens: 0,
+      cacheCreationTokens: 0,
+      rounds: 2,
+    });
     expect(roundsSeen).toEqual([
       [1, 16],
       [2, 16],
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test cases 9–16 da techspec V2.5 (prompt caching no loop agêntico)
+// ---------------------------------------------------------------------------
+
+/** Total de markers `cache_control` de um request (system + mensagens). */
+function markerCount(request: ChatRequest | undefined): number {
+  if (request === undefined) {
+    return -1;
+  }
+  const inSystem = request.system.filter((block) => block.cache_control !== undefined).length;
+  const inMessages = request.messages
+    .flatMap((message): Array<UserContentBlock | AssistantContentBlock> => message.content)
+    .filter((block) => block.cache_control !== undefined).length;
+  return inSystem + inMessages;
+}
+
+/** Cópia do request sem nenhum marker — para comparar byte a byte com o modo off. */
+function stripMarkers(request: ChatRequest): ChatRequest {
+  const clone = structuredClone(request);
+  for (const block of clone.system) {
+    delete block.cache_control;
+  }
+  for (const message of clone.messages) {
+    for (const block of message.content) {
+      delete block.cache_control;
+    }
+  }
+  return clone;
+}
+
+describe('LlmInvestigationAssistant — prompt caching (V2.5)', () => {
+  // Teste 9
+  it('cache ligado, rodada 1: exatamente 2 breakpoints — último bloco do system e último bloco da pergunta', async () => {
+    const chat = new FakeAnthropicChat([endTurn(MARKDOWN)]);
+
+    await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker({}));
+
+    const request = chat.requests[0];
+    expect(request?.system.at(-1)?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(request?.messages.at(-1)?.content.at(-1)?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(markerCount(request)).toBe(2);
+  });
+
+  // Teste 10
+  it('cache ligado, rodada N: breakpoint móvel no último bloco da última mensagem; o da rodada anterior removido — nunca mais de 2 markers', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      toolUseRound([toolUseBlock('toolu_2', 'get_top_exceptions', { service: 'checkout-api' })]),
+      endTurn(MARKDOWN),
+    ]);
+
+    await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    // Todo request carrega exatamente 2 markers (teto de 4 da API com folga)
+    expect(chat.requests.map(markerCount)).toEqual([2, 2, 2]);
+
+    const third = chat.requests[2];
+    const lastMessage = third?.messages.at(-1);
+    expect(lastMessage?.role).toBe('user');
+    expect(lastMessage?.content.at(-1)).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'toolu_2',
+      cache_control: { type: 'ephemeral' },
+    });
+    // Markers das rodadas anteriores removidos: nem a pergunta inicial nem o
+    // tool_result da rodada 1 carregam cache_control no request da rodada 3
+    expect(third?.messages[0]?.content.at(-1)?.cache_control).toBeUndefined();
+    expect(third?.messages[2]?.content.at(-1)?.cache_control).toBeUndefined();
+  });
+
+  // Teste 11
+  it('múltiplos tool_use na mesma rodada → marker móvel apenas no último tool_result da mensagem user seguinte', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([
+        toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' }),
+        toolUseBlock('toolu_2', 'get_top_exceptions', { service: 'checkout-api' }),
+      ]),
+      endTurn(MARKDOWN),
+    ]);
+
+    await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    const followUp = chat.requests[1]?.messages.at(-1);
+    expect(followUp?.role).toBe('user');
+    expect(followUp?.content).toHaveLength(2);
+    expect(followUp?.content[0]?.cache_control).toBeUndefined();
+    expect(followUp?.content[1]).toMatchObject({
+      type: 'tool_result',
+      tool_use_id: 'toolu_2',
+      cache_control: { type: 'ephemeral' },
+    });
+    expect(markerCount(chat.requests[1])).toBe(2);
+  });
+
+  // Teste 12
+  it('cache desligado (cacheEnabled: false) → nenhum cache_control em nenhum request de nenhuma rodada', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      endTurn(MARKDOWN),
+    ]);
+    const assistant = makeAssistant(chat, { ...CONFIG, cacheEnabled: false });
+
+    await assistant.investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    expect(chat.requests).toHaveLength(2);
+    expect(chat.requests.map(markerCount)).toEqual([0, 0]);
+    // Nenhum campo extra enviado — request idêntico ao da V2
+    expect(JSON.stringify(chat.requests)).not.toContain('cache_control');
+  });
+
+  // Teste 13
+  it('agregação: cacheReadTokens/cacheCreationTokens somam as rodadas; inputTokens só a parcela não cacheada; rounds inalterado', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })], {
+        input_tokens: 15_000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 3480,
+        cache_read_input_tokens: 0,
+      }),
+      endTurn(MARKDOWN, {
+        input_tokens: 812,
+        output_tokens: 245,
+        cache_creation_input_tokens: 1200,
+        cache_read_input_tokens: 11_260,
+      }),
+    ]);
+    const assistant = makeAssistant(chat);
+
+    await assistant.investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    expect(assistant.lastUsage).toEqual({
+      inputTokens: 15_812,
+      outputTokens: 445,
+      cacheReadTokens: 11_260,
+      cacheCreationTokens: 4680,
+      rounds: 2,
+    });
+  });
+
+  // Teste 14
+  it('system e mensagens byte-idênticos com cache ligado ou desligado — só os markers diferem', async () => {
+    const script = () => [
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      endTurn(MARKDOWN),
+    ];
+    const chatOn = new FakeAnthropicChat(script());
+    const chatOff = new FakeAnthropicChat(script());
+
+    await makeAssistant(chatOn).investigate(QUESTION, new StubToolInvoker(stubResponses()));
+    await makeAssistant(chatOff, { ...CONFIG, cacheEnabled: false }).investigate(
+      QUESTION,
+      new StubToolInvoker(stubResponses()),
+    );
+
+    expect(chatOn.requests.map(stripMarkers)).toEqual(chatOff.requests);
+  });
+
+  // Teste 15
+  it('regressão: audit log (seq, params, resultSummary) idêntico com cache ligado/desligado', async () => {
+    const script = () => [
+      toolUseRound([
+        toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api', ...WINDOW }),
+        toolUseBlock('toolu_2', 'get_top_exceptions', { service: 'checkout-api' }),
+      ]),
+      endTurn(MARKDOWN),
+    ];
+
+    const outcomeOn = await makeAssistant(new FakeAnthropicChat(script())).investigate(
+      QUESTION,
+      new StubToolInvoker(stubResponses()),
+    );
+    const outcomeOff = await makeAssistant(new FakeAnthropicChat(script()), { ...CONFIG, cacheEnabled: false }).investigate(
+      QUESTION,
+      new StubToolInvoker(stubResponses()),
+    );
+
+    expect(outcomeOn.kind).toBe('markdown');
+    expect(outcomeOff).toEqual(expect.objectContaining({ kind: outcomeOn.kind }));
+    if (outcomeOn.kind !== 'markdown' || outcomeOff.kind !== 'markdown') {
+      return;
+    }
+    const project = (records: typeof outcomeOn.audit) =>
+      records.map(({ seq, tool, params, resultSummary }) => ({ seq, tool, params, resultSummary }));
+    expect(project(outcomeOn.audit)).toEqual(project(outcomeOff.audit));
+    expect(outcomeOn.markdown).toBe(outcomeOff.markdown);
+  });
+
+  // Teste 16
+  it('erro da API com cache ligado → LlmEngineError(api_error) com o mesmo envelope da V2', async () => {
+    const failure = new Error('529 overloaded');
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      failure,
+    ]);
+
+    expect.assertions(4);
+    try {
+      await makeAssistant(chat).investigate(QUESTION, new StubToolInvoker(stubResponses()));
+    } catch (error) {
+      expect(error).toBeInstanceOf(LlmEngineError);
+      const engineError = error as LlmEngineError;
+      expect(engineError.code).toBe('api_error');
+      expect(engineError.cause).toBe(failure);
+      // Audit das rodadas já executadas preservado no envelope, como na V2
+      expect(engineError.audit.map((record) => record.tool)).toEqual(['get_error_summary']);
+    }
   });
 });

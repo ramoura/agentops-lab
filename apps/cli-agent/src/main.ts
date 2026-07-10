@@ -9,7 +9,7 @@ import {
   LlmInvestigationAssistant,
   resolveLlmEngineConfig,
 } from '@agentops/llm-engine';
-import type { LlmEngineConfig } from '@agentops/llm-engine';
+import type { LlmEngineConfig, LlmUsage } from '@agentops/llm-engine';
 import { ENGINE_KINDS } from '@agentops/types';
 import type { EngineKind, InvestigationAssistant, ToolInvoker, ToolName } from '@agentops/types';
 import { McpConnectionError, McpToolInvoker } from './mcp-tool-invoker.js';
@@ -107,6 +107,22 @@ export function formatTokenCount(count: number): string {
   return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
 }
 
+/**
+ * Linha de custo do modo llm (stderr). Com cache efetivo, detalha lido/escrito
+ * entre parênteses; com cache zero (opt-out ou prefixo abaixo do mínimo
+ * cacheável) degrada para o formato da V2 — sem parêntese vazio.
+ */
+export function formatUsageLine(usage: LlmUsage): string {
+  const cacheDetail =
+    usage.cacheReadTokens + usage.cacheCreationTokens > 0
+      ? ` (${formatTokenCount(usage.cacheReadTokens)} cache lido · ${formatTokenCount(usage.cacheCreationTokens)} cache escrito)`
+      : '';
+  return (
+    `Tokens: ${formatTokenCount(usage.inputTokens)} entrada${cacheDetail} · ` +
+    `${formatTokenCount(usage.outputTokens)} saída · ${usage.rounds} rodada(s)`
+  );
+}
+
 async function main(): Promise<number> {
   const useColor = shouldUseColor(process.stdout);
 
@@ -188,9 +204,7 @@ async function main(): Promise<number> {
     // Visibilidade de custo por investigação (modo llm): agregado em stderr.
     const usage = llmAssistant?.lastUsage;
     if (usage !== undefined && usage !== null) {
-      progress(
-        `Tokens: ${formatTokenCount(usage.inputTokens)} entrada · ${formatTokenCount(usage.outputTokens)} saída · ${usage.rounds} rodada(s)`,
-      );
+      progress(formatUsageLine(usage));
     }
     return 0;
   } catch (error) {

@@ -65,7 +65,7 @@ npm run investigate -- --engine=llm "Investigue por que o checkout-api teve aume
 No modo llm não há parser: a pergunta crua vai para o modelo com a skill [`investigate-incident`](./skills/investigate-incident/skill.md) como system prompt e as definições das 9 tools descobertas em runtime via `listTools()` do MCP. O loop agêntico é manual (`while stop_reason === 'tool_use'`) — cada rodada, tool_use e tool_result é visível e auditável, que é exatamente o objeto de estudo do lab. Perguntas mais livres que o regex da V1 passam a funcionar; pergunta sem serviço/período identificáveis produz um markdown declarando o que faltou, sem chamar tools de dados.
 
 - O relatório em stdout é o **markdown do modelo** (mesmas 7 seções do RF4) + a seção **"Tools chamadas" anexada por código** a partir do audit log — a auditoria nunca depende da honestidade do modelo.
-- Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 12.4k entrada · 1.8k saída · 3 rodadas`) vão para stderr; stdout redirecionado permanece limpo.
+- Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 8 entrada (34.2k cache lido · 16.4k cache escrito) · 4.0k saída · 4 rodada(s)`) vão para stderr; stdout redirecionado permanece limpo.
 - Sem `ANTHROPIC_API_KEY`, a CLI falha rápido com orientação (exit 1), **antes** de spawnar o server MCP.
 
 Variáveis de ambiente:
@@ -77,8 +77,24 @@ Variáveis de ambiente:
 | `AGENTOPS_LLM_MODEL` | `claude-sonnet-5` | Modelo da Messages API. |
 | `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
 | `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
+| `AGENTOPS_LLM_CACHE` | `on` | Prompt caching do loop agêntico (V2.5). `off`/`false`/`0` desligam — útil para medir o custo antes/depois com o mesmo binário. |
 
 **Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). O motor não envia parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos da Messages API nos modelos atuais (`claude-sonnet-5`+) e retornam 400 se enviados — a reprodutibilidade do modo llm depende do contrato de formato no prompt, não de sampling. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
+
+### Prompt caching (V2.5)
+
+O loop agêntico reenvia o prompt quase completo a cada rodada — system prompt, definições das 9 tools e histórico crescente. O motor marca **dois breakpoints de cache** por request (`cache_control: {type: "ephemeral"}`, TTL de 5 min): um **estável** no system (pela ordem `tools → system → messages`, cacheia tools + system juntos — compartilhado inclusive entre investigações) e um **móvel** no fim do histórico (cada rodada lê o prefixo escrito pela anterior). Ligado por default; `AGENTOPS_LLM_CACHE=off` desliga sem mudar um byte do prompt.
+
+Números medidos (2026-07-09, mesma pergunta, mesmo binário, 4 rodadas, `claude-sonnet-5`):
+
+| Execução | Entrada (preço cheio, 1×) | Cache lido (0,1×) | Cache escrito (1,25×) | Saída | Custo de entrada relativo |
+| --- | --- | --- | --- | --- | --- |
+| `AGENTOPS_LLM_CACHE=off` | 50.7k | — | — | 4.2k | 1,00× |
+| default (cache ligado) | 8 | 34.2k | 16.4k | 4.0k | **0,47×** (−53%) |
+
+A redução de ~53% é o piso — primeira investigação, cache frio (todo o prefixo pago como escrita a 1,25×). Com leituras dominando (mais rodadas, ou execuções em sequência reutilizando o prefixo estável — o caso do eval), o ganho tende à faixa de 70–80%.
+
+**Troubleshooting — cache frio**: o primeiro passo de diagnóstico no modo llm é a linha de custo em stderr. `cache lido == 0` numa execução **multi-rodada** significa invalidação silenciosa: ou o prefixo mudou entre rodadas (qualquer byte alterado antes de um breakpoint invalida o cache dali em diante — ex.: ordem das tools do `listTools()` variando), ou o prefixo está abaixo do mínimo cacheável (1.024 tokens no `claude-sonnet-5`) — em ambos os casos a API ignora o marker **sem erro**, e só a métrica acusa.
 
 **Gap do RF6 como objeto de estudo**: no motor determinístico, "nenhum fato fora de tool" é garantido por código; no modo llm o modelo *pode* alucinar um fato — a garantia vira instrução de prompt. As mitigações são em camadas (guardrails no system prompt, linha `Fonte:` obrigatória por evidência, `must_not_include` nos casos de eval e auditoria completa para conferência manual tool a tool), e observar esse gap na prática é parte do propósito do lab.
 

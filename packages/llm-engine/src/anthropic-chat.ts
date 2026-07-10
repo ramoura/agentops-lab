@@ -9,15 +9,31 @@ import type { AnthropicToolDefinition } from './tool-mapping.js';
  * (nenhum teste da suíte default toca rede ou gasta tokens).
  */
 
+/**
+ * Breakpoint de prompt caching da Messages API (`cache_control`, TTL de 5
+ * minutos). Metadado do bloco — o texto do prompt não muda um byte com o
+ * marker presente ou ausente.
+ */
+export interface CacheControl {
+  type: 'ephemeral';
+}
+
+/** Bloco de system com breakpoint opcional (`system` é sempre `SystemBlock[]`). */
+export interface SystemBlock {
+  type: 'text';
+  text: string;
+  cache_control?: CacheControl;
+}
+
 /** Bloco de conteúdo produzido pelo modelo (assistant). */
 export type AssistantContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
+  | { type: 'text'; text: string; cache_control?: CacheControl }
+  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; cache_control?: CacheControl };
 
 /** Bloco de conteúdo enviado pelo usuário (pergunta crua ou tool_result). */
 export type UserContentBlock =
-  | { type: 'text'; text: string }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean };
+  | { type: 'text'; text: string; cache_control?: CacheControl }
+  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; cache_control?: CacheControl };
 
 export type ChatMessage =
   | { role: 'user'; content: UserContentBlock[] }
@@ -31,16 +47,23 @@ export type ChatMessage =
 export interface ChatRequest {
   model: string;
   max_tokens: number;
-  system: string;
+  system: SystemBlock[];
   tools: AnthropicToolDefinition[];
   tool_choice: { type: 'auto' };
   messages: ChatMessage[];
 }
 
-/** Uso de tokens de uma rodada (campo `usage` da resposta). */
+/**
+ * Uso de tokens de uma rodada (campo `usage` da resposta). Os campos de cache
+ * chegam sempre preenchidos (ausentes no upstream → `0`, nunca `undefined`);
+ * a entrada total da rodada é
+ * `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
+ */
 export interface ChatUsage {
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
 }
 
 /** Espelho tipado da resposta de `messages.create()` usada pelo motor. */
@@ -75,6 +98,8 @@ export class AnthropicChatAdapter implements AnthropicChatPort {
 
   async create(request: ChatRequest): Promise<ChatResponse> {
     const response = await this.messages.create({
+      // system e messages são passthrough — inclusive `cache_control`, que o
+      // SDK aceita nativamente (recurso GA, sem beta header).
       model: request.model,
       max_tokens: request.max_tokens,
       system: request.system,
@@ -99,6 +124,9 @@ export class AnthropicChatAdapter implements AnthropicChatPort {
       usage: {
         input_tokens: response.usage.input_tokens,
         output_tokens: response.usage.output_tokens,
+        // Ausentes/null no upstream (fake antigo, modelos sem cache) → 0.
+        cache_creation_input_tokens: response.usage.cache_creation_input_tokens ?? 0,
+        cache_read_input_tokens: response.usage.cache_read_input_tokens ?? 0,
       },
     };
   }

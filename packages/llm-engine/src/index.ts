@@ -1,4 +1,5 @@
 export {
+  DEFAULT_LLM_CACHE_ENABLED,
   DEFAULT_LLM_MAX_ROUNDS,
   DEFAULT_LLM_MAX_TOKENS,
   DEFAULT_LLM_MODEL,
@@ -17,11 +18,13 @@ export { AnthropicChatAdapter } from './anthropic-chat.js';
 export type {
   AnthropicChatPort,
   AssistantContentBlock,
+  CacheControl,
   ChatMessage,
   ChatRequest,
   ChatResponse,
   ChatUsage,
   MessagesApi,
+  SystemBlock,
   UserContentBlock,
 } from './anthropic-chat.js';
 export { mapMcpToolsToAnthropic } from './tool-mapping.js';

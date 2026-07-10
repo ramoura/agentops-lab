@@ -1,6 +1,6 @@
 import { TOOL_NAMES } from '@agentops/types';
 import type { McpToolDefinition, ToolInvoker, ToolName } from '@agentops/types';
-import type { AnthropicChatPort, AssistantContentBlock, ChatRequest, ChatResponse } from '../anthropic-chat.js';
+import type { AnthropicChatPort, AssistantContentBlock, ChatRequest, ChatResponse, ChatUsage } from '../anthropic-chat.js';
 
 /**
  * Fakes/stubs do motor LLM: toda a lógica do loop agêntico é exercitada sem
@@ -8,7 +8,21 @@ import type { AnthropicChatPort, AssistantContentBlock, ChatRequest, ChatRespons
  * modelo; `StubToolInvoker` segue o padrão de `packages/core/src/engine.test.ts`.
  */
 
-export const DEFAULT_USAGE = { input_tokens: 100, output_tokens: 50 };
+export const DEFAULT_USAGE: ChatUsage = {
+  input_tokens: 100,
+  output_tokens: 50,
+  cache_creation_input_tokens: 0,
+  cache_read_input_tokens: 0,
+};
+
+/**
+ * `ChatUsage` completo a partir de campos parciais — os de cache default em
+ * `0`, como o adapter normaliza. Permite roteirizar respostas com usage de
+ * cache: `endTurn(md, { cache_read_input_tokens: 44200 })`.
+ */
+export function makeUsage(partial: Partial<ChatUsage> = {}): ChatUsage {
+  return { ...DEFAULT_USAGE, ...partial };
+}
 
 /**
  * Implementa `AnthropicChatPort` com um roteiro de respostas. Cada `create()`
@@ -38,13 +52,13 @@ export class FakeAnthropicChat implements AnthropicChatPort {
 }
 
 /** Resposta final do modelo (`end_turn`) com um bloco de texto. */
-export function endTurn(text: string, usage = DEFAULT_USAGE): ChatResponse {
-  return { content: [{ type: 'text', text }], stop_reason: 'end_turn', usage };
+export function endTurn(text: string, usage: Partial<ChatUsage> = {}): ChatResponse {
+  return { content: [{ type: 'text', text }], stop_reason: 'end_turn', usage: makeUsage(usage) };
 }
 
 /** Rodada de tool use: um ou mais blocos `tool_use` (com texto opcional antes). */
-export function toolUseRound(blocks: AssistantContentBlock[], usage = DEFAULT_USAGE): ChatResponse {
-  return { content: blocks, stop_reason: 'tool_use', usage };
+export function toolUseRound(blocks: AssistantContentBlock[], usage: Partial<ChatUsage> = {}): ChatResponse {
+  return { content: blocks, stop_reason: 'tool_use', usage: makeUsage(usage) };
 }
 
 export function toolUseBlock(

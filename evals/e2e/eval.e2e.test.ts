@@ -3,6 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
+import {
+  AnthropicChatAdapter,
+  buildSystemPrompt,
+  LlmInvestigationAssistant,
+  resolveLlmEngineConfig,
+} from '@agentops/llm-engine';
 import { execa } from 'execa';
 import { describe, expect, it } from 'vitest';
 
@@ -86,16 +93,33 @@ describe('smoke opt-in com LLM real (npm run eval:llm)', () => {
     const [case001] = await loadCases();
     expect(case001?.id).toBe('case-001-database-timeout');
 
+    // Assistant real injetado (mesma montagem do runner) para que o teste
+    // possa ler o `lastUsage` agregado — a asserção de cache da V2.5 precisa
+    // de `rounds` e `cacheReadTokens`, que não saem em stdout. As definições
+    // das tools são pré-carregadas de um server MCP efêmero; a investigação em
+    // si usa o invoker que o próprio runner spawna.
+    const config = resolveLlmEngineConfig(process.env);
+    const toolLoader = await McpToolInvoker.connect({ serverStderr: 'inherit' });
+    const toolDefinitions = await toolLoader.listTools().finally(() => toolLoader.close());
+    const assistant = new LlmInvestigationAssistant(
+      AnthropicChatAdapter.fromApiKey(config.apiKey),
+      async () => toolDefinitions,
+      config,
+      buildSystemPrompt(),
+    );
+
     const casesDir = await mkdtemp(join(tmpdir(), 'agentops-eval-llm-'));
     try {
       await writeFile(join(casesDir, 'case-001-database-timeout.json'), JSON.stringify(case001), 'utf8');
 
       const outLines: string[] = [];
+      const errLines: string[] = [];
       const summary = await runEvals({
         engine: 'llm',
+        assistant,
         casesDir,
         out: (line) => outLines.push(line),
-        err: () => {},
+        err: (line) => errLines.push(line),
       });
 
       expect(summary.engine).toBe('llm');
@@ -104,6 +128,18 @@ describe('smoke opt-in com LLM real (npm run eval:llm)', () => {
       expect(output).toContain('case-001-database-timeout — score');
       expect(output).toMatch(/\[(OK|FALHOU)\] finding:DatabaseTimeoutException/);
       expect(output).toContain('· engine: llm');
+
+      // V2.5 — asserção LENIENTE de cache: em investigação com 2+ rodadas, a
+      // rodada 2 deve ter lido o prefixo escrito pela rodada 1
+      // (`cacheReadTokens > 0` no agregado). Valores exatos são proibidos —
+      // variam por execução (TTL/eviction do lado do servidor). Rodada única
+      // não tem o que ler; cache desligado por env não tem o que assertar.
+      const usage = assistant.lastUsage;
+      expect(usage).not.toBeNull();
+      expect(errLines.join('\n')).toContain('Cache:');
+      if (config.cacheEnabled && usage !== null && usage.rounds >= 2) {
+        expect(usage.cacheReadTokens).toBeGreaterThan(0);
+      }
     } finally {
       await rm(casesDir, { recursive: true, force: true });
     }

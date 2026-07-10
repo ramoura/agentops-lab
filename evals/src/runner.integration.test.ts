@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LlmEngineError } from '@agentops/llm-engine';
+import type { LlmUsage } from '@agentops/llm-engine';
 import type { InvestigationAssistant, InvestigationOutcome } from '@agentops/types';
 import { loadCases, runEvals } from './runner.js';
 import type { EvalRunSummary } from './runner.js';
@@ -50,6 +51,8 @@ describe('runEvals() sobre os 3 casos', () => {
 
     // Progresso separado dos resultados (stderr ≠ stdout)
     expect(errLines.join('\n')).toContain('case-001-database-timeout');
+    // Teste 21 (V2.5): modo deterministic não emite linha de cache
+    expect(errLines.join('\n')).not.toContain('Cache:');
   }, 90_000);
 });
 
@@ -118,14 +121,16 @@ class FakeLlmAssistant implements InvestigationAssistant {
 }
 
 // Testes 36 (modo llm) e 37 + integração "eval runner com engine fake"
+// + teste 22 (V2.5): fake sem `lastUsage` → runner não quebra, linha omitida
 describe('runEvals({ engine: "llm", assistant: fake }) sobre os 3 casos', () => {
   it('aplica o TextReportScorer, imprime o breakdown e o resumo indica engine: llm', async () => {
     const outLines: string[] = [];
+    const errLines: string[] = [];
     const summary = await runEvals({
       engine: 'llm',
       assistant: new FakeLlmAssistant(),
       out: (line) => outLines.push(line),
-      err: () => {},
+      err: (line) => errLines.push(line),
     });
 
     expect(summary.engine).toBe('llm');
@@ -140,6 +145,48 @@ describe('runEvals({ engine: "llm", assistant: fake }) sobre os 3 casos', () => 
     expect(output).toContain('[OK] proximos_passos_seguros');
     // Resumo indica o engine usado
     expect(output).toContain('Resumo: 3/3 caso(s) aprovado(s) · score médio 1.00 · engine: llm');
+
+    // Teste 22 (V2.5): instrumentação opcional — fake sem `lastUsage` não
+    // quebra o runner e a linha de cache é simplesmente omitida.
+    expect(errLines.join('\n')).not.toContain('Cache:');
+  }, 90_000);
+});
+
+/** Fake llm que expõe `lastUsage` (mesma superfície do assistant concreto). */
+class FakeLlmAssistantWithUsage extends FakeLlmAssistant {
+  readonly lastUsage: LlmUsage = {
+    inputTokens: 3900,
+    outputTokens: 5100,
+    cacheReadTokens: 44200,
+    cacheCreationTokens: 9200,
+    rounds: 5,
+  };
+}
+
+// Teste 20 (V2.5): linha de cache por caso em stderr; stdout inalterado
+describe('runEvals({ engine: "llm" }) com assistant expondo lastUsage', () => {
+  it('emite a linha Cache por caso em stderr e mantém o stdout de scores intacto', async () => {
+    const outLines: string[] = [];
+    const errLines: string[] = [];
+    const summary = await runEvals({
+      engine: 'llm',
+      assistant: new FakeLlmAssistantWithUsage(),
+      out: (line) => outLines.push(line),
+      err: (line) => errLines.push(line),
+    });
+
+    // Uma linha de cache por caso, no formato da techspec
+    const cacheLines = errLines.filter((line) => line.includes('Cache:'));
+    expect(cacheLines).toHaveLength(3);
+    for (const line of cacheLines) {
+      expect(line).toBe('  Cache: 44.2k lido · 9.2k escrito · 3.9k sem cache');
+    }
+
+    // stdout byte-idêntico ao da V2: scores/resumo sem nenhuma linha de cache
+    const output = outLines.join('\n');
+    expect(output).not.toContain('Cache:');
+    expect(output).toContain('Resumo: 3/3 caso(s) aprovado(s) · score médio 1.00 · engine: llm');
+    expect(summary.passedCount).toBe(3);
   }, 90_000);
 });
 

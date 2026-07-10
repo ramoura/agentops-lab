@@ -2,7 +2,7 @@ import { readFile, readdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
-import { EngineArgError, resolveEngineArgs } from '@agentops/cli-agent/main';
+import { EngineArgError, formatTokenCount, resolveEngineArgs } from '@agentops/cli-agent/main';
 import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
 import { renderReport } from '@agentops/cli-agent/renderer';
 import { DeterministicInvestigationAssistant } from '@agentops/core';
@@ -12,6 +12,7 @@ import {
   LlmInvestigationAssistant,
   resolveLlmEngineConfig,
 } from '@agentops/llm-engine';
+import type { LlmUsage } from '@agentops/llm-engine';
 import { evalCaseSchema } from '@agentops/types';
 import type { EngineKind, EvalCase, EvalCaseResult, InvestigationAssistant } from '@agentops/types';
 import { DeterministicEvalScorer } from '../scoring/scorer.js';
@@ -108,6 +109,19 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
     for (const evalCase of cases) {
       err(`→ ${evalCase.id}`);
       const outcome = await assistant.investigate(evalCase.question, invoker);
+      // Agregado de cache do caso (V2.5, progresso em stderr): só no modo llm
+      // e só quando o assistant concreto expõe `lastUsage` — instrumentação
+      // opcional; fakes injetados sem o campo apenas omitem a linha.
+      if (engine === 'llm') {
+        const usage = readLastUsage(assistant);
+        if (usage !== null) {
+          err(
+            `  Cache: ${formatTokenCount(usage.cacheReadTokens)} lido · ` +
+              `${formatTokenCount(usage.cacheCreationTokens)} escrito · ` +
+              `${formatTokenCount(usage.inputTokens)} sem cache`,
+          );
+        }
+      }
       if (outcome.kind === 'clarification') {
         throw new Error(
           `caso ${evalCase.id}: a pergunta não pôde ser interpretada (faltou: ${outcome.missing
@@ -138,6 +152,12 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
   out(`Resumo: ${passedCount}/${results.length} caso(s) aprovado(s) · score médio ${averageScore.toFixed(2)} · engine: ${engine}`);
 
   return { results, passedCount, averageScore, engine };
+}
+
+/** `lastUsage` do assistant concreto quando exposto (`LlmInvestigationAssistant`); null caso contrário. */
+function readLastUsage(assistant: InvestigationAssistant): LlmUsage | null {
+  const usage = (assistant as { lastUsage?: LlmUsage | null }).lastUsage;
+  return usage ?? null;
 }
 
 /** Score do caso + breakdown critério a critério — não apenas o agregado (RF27). */
