@@ -13,6 +13,7 @@ import {
   getRunbookInputSchema,
   getTopExceptionsInputSchema,
   investigationReportSchema,
+  investigationTraceRecordSchema,
   latencySummarySchema,
   logEntrySchema,
   recentLogsResultSchema,
@@ -505,5 +506,78 @@ describe('contratos de relatório, auditoria e eval', () => {
     };
     expect(evalCaseResultSchema.safeParse(result).success).toBe(true);
     expect(evalCaseResultSchema.safeParse({ ...result, score: 1.5 }).success).toBe(false);
+  });
+});
+
+describe('InvestigationTraceRecord (mini-spec trace-log)', () => {
+  const record = {
+    seq: 1,
+    tool: 'get_error_summary',
+    params: { service: 'checkout-api', ...WINDOW },
+    resultSummary: '412 req, 87x 5xx',
+    durationMs: 12,
+  };
+
+  const baseRecord = {
+    traceId: '2026-07-11T14-32-07-123Z-8f2a',
+    runId: '2026-07-11T14-32-05-901Z-c103',
+    timestamp: '2026-07-11T14:32:07.123Z',
+    source: 'investigate' as const,
+    caseId: null,
+    question: 'Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08',
+    engine: 'llm' as const,
+    model: 'claude-sonnet-5',
+    audit: [record],
+    rounds: null,
+    usage: null,
+    eval: null,
+  };
+
+  it('aceita um registro válido com outcome.kind "markdown"', () => {
+    const result = investigationTraceRecordSchema.safeParse({
+      ...baseRecord,
+      outcome: { kind: 'markdown', markdown: 'Resumo executivo…', audit: [record] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('aceita um registro válido com outcome.kind "report"', () => {
+    const result = investigationTraceRecordSchema.safeParse({
+      ...baseRecord,
+      engine: 'deterministic',
+      model: null,
+      outcome: {
+        kind: 'report',
+        report: {
+          context: { question: baseRecord.question, service: 'checkout-api', window: WINDOW, symptom: null },
+          summary: 'resumo',
+          evidences: [],
+          primaryHypothesis: null,
+          alternativeHypotheses: [],
+          safeNextSteps: [],
+          missingData: [],
+          confidence: 'baixa',
+          audit: [record],
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('aceita um registro válido com outcome.kind "clarification"', () => {
+    const result = investigationTraceRecordSchema.safeParse({
+      ...baseRecord,
+      outcome: { kind: 'clarification', missing: [{ field: 'service', hint: 'informe o serviço' }] },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejeita eval.score fora de [0, 1] (paridade com evalCaseResultSchema)', () => {
+    const result = investigationTraceRecordSchema.safeParse({
+      ...baseRecord,
+      outcome: { kind: 'markdown', markdown: 'texto', audit: [] },
+      eval: { caseId: 'case-001-database-timeout', score: 1.5, passed: true, criteria: [] },
+    });
+    expect(result.success).toBe(false);
   });
 });

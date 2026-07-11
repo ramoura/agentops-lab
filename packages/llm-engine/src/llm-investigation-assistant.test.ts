@@ -352,6 +352,64 @@ describe('LlmInvestigationAssistant — loop agêntico', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Testes da tarefa 1.0 (mini-spec trace-log): captura rodada a rodada em lastTrace
+// ---------------------------------------------------------------------------
+
+describe('LlmInvestigationAssistant — lastTrace (trace-log)', () => {
+  it('lastTrace começa vazio antes da primeira investigação', () => {
+    const chat = new FakeAnthropicChat([endTurn(MARKDOWN)]);
+    const assistant = makeAssistant(chat);
+
+    expect(assistant.lastTrace).toEqual([]);
+  });
+
+  it('uma entrada por rodada, na ordem; tool_use com toolResults correlacionado por tool_use_id; rodada final com toolResults vazio', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      toolUseRound([toolUseBlock('toolu_2', 'get_top_exceptions', { service: 'checkout-api' })]),
+      endTurn(MARKDOWN),
+    ]);
+    const assistant = makeAssistant(chat);
+
+    await assistant.investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    expect(assistant.lastTrace.map((r) => r.round)).toEqual([1, 2, 3]);
+    expect(assistant.lastTrace[0]).toMatchObject({
+      round: 1,
+      stopReason: 'tool_use',
+      assistantContent: [{ type: 'tool_use', id: 'toolu_1', name: 'get_error_summary', input: { service: 'checkout-api' } }],
+      toolResults: [
+        { type: 'tool_result', tool_use_id: 'toolu_1', content: JSON.stringify({ totalRequests: 412, count5xx: 87 }) },
+      ],
+    });
+    expect(assistant.lastTrace[1]).toMatchObject({
+      round: 2,
+      stopReason: 'tool_use',
+      toolResults: [
+        {
+          type: 'tool_result',
+          tool_use_id: 'toolu_2',
+          content: JSON.stringify({ exceptions: [{ exception: 'DatabaseTimeoutException', count: 78 }] }),
+        },
+      ],
+    });
+    expect(assistant.lastTrace[2]).toMatchObject({ round: 3, stopReason: 'end_turn', toolResults: [] });
+  });
+
+  it('cache_control nunca aparece em assistantContent/toolResults de nenhum RoundTrace, mesmo com cacheEnabled: true (V2.5)', async () => {
+    const chat = new FakeAnthropicChat([
+      toolUseRound([toolUseBlock('toolu_1', 'get_error_summary', { service: 'checkout-api' })]),
+      endTurn(MARKDOWN),
+    ]);
+    const assistant = makeAssistant(chat, { ...CONFIG, cacheEnabled: true });
+
+    await assistant.investigate(QUESTION, new StubToolInvoker(stubResponses()));
+
+    expect(JSON.stringify(assistant.lastTrace)).not.toContain('cache_control');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Test cases 9–16 da techspec V2.5 (prompt caching no loop agêntico)
 // ---------------------------------------------------------------------------
 

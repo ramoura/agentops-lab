@@ -1,6 +1,15 @@
 import { InMemoryAuditLog } from '@agentops/core';
 import { TOOL_NAMES } from '@agentops/types';
-import type { InvestigationAssistant, InvestigationOutcome, McpToolDefinition, ToolInvoker, ToolName } from '@agentops/types';
+import type {
+  InvestigationAssistant,
+  InvestigationOutcome,
+  McpToolDefinition,
+  RoundContentBlock,
+  RoundToolResult,
+  RoundTrace,
+  ToolInvoker,
+  ToolName,
+} from '@agentops/types';
 import type {
   AnthropicChatPort,
   AssistantContentBlock,
@@ -44,6 +53,8 @@ export interface LlmInvestigationHooks {
 export class LlmInvestigationAssistant implements InvestigationAssistant {
   /** Uso agregado da última investigação (null antes da primeira). */
   private usage: LlmUsage | null = null;
+  /** Trace rodada a rodada da última investigação (mesmo padrão do `lastUsage`). */
+  private trace: RoundTrace[] = [];
 
   constructor(
     private readonly chat: AnthropicChatPort,
@@ -57,12 +68,18 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
     return this.usage;
   }
 
+  get lastTrace(): RoundTrace[] {
+    return this.trace;
+  }
+
   async investigate(question: string, tools: ToolInvoker): Promise<InvestigationOutcome> {
     const anthropicTools = mapMcpToolsToAnthropic(await this.toolSource());
     const auditLog = new InMemoryAuditLog();
     const auditedTools = auditLog.wrap(tools);
     const usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, rounds: 0 };
     this.usage = usage;
+    const trace: RoundTrace[] = [];
+    this.trace = trace;
 
     const { cacheEnabled } = this.config;
     // Breakpoint estável (V2.5): no último bloco do system — pela ordem de
@@ -117,12 +134,28 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
       }
 
       if (response.stop_reason === 'tool_use') {
+        const toolResults = await this.executeToolUses(response.content, auditedTools);
+        trace.push({
+          round,
+          assistantContent: response.content.map(toRoundContentBlock),
+          stopReason: response.stop_reason,
+          usage: { ...response.usage },
+          toolResults: toolResults.flatMap(toRoundToolResult),
+        });
         messages.push({ role: 'assistant', content: response.content });
-        messages.push({ role: 'user', content: await this.executeToolUses(response.content, auditedTools) });
+        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
       // end_turn (ou stop_reason equivalente): o markdown final do relatório.
+      trace.push({
+        round,
+        assistantContent: response.content.map(toRoundContentBlock),
+        stopReason: response.stop_reason,
+        usage: { ...response.usage },
+        toolResults: [],
+      });
+
       const markdown = response.content
         .filter((block): block is Extract<AssistantContentBlock, { type: 'text' }> => block.type === 'text')
         .map((block) => block.text)
@@ -186,6 +219,22 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
 
 function isKnownToolName(name: string): name is ToolName {
   return (TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/** Bloco do trace a partir do bloco da resposta do modelo — descarta `cache_control` (nunca presente aqui). */
+function toRoundContentBlock(block: AssistantContentBlock): RoundContentBlock {
+  if (block.type === 'text') {
+    return { type: 'text', text: block.text };
+  }
+  return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
+}
+
+/** Resultado do trace a partir do `tool_result` enviado ao modelo — descarta `cache_control`. */
+function toRoundToolResult(block: UserContentBlock): RoundToolResult[] {
+  if (block.type !== 'tool_result') {
+    return [];
+  }
+  return [{ type: 'tool_result', tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error }];
 }
 
 /**

@@ -11,9 +11,17 @@ import {
 } from '@agentops/llm-engine';
 import type { LlmEngineConfig, LlmUsage } from '@agentops/llm-engine';
 import { ENGINE_KINDS } from '@agentops/types';
-import type { EngineKind, InvestigationAssistant, ToolInvoker, ToolName } from '@agentops/types';
+import type {
+  EngineKind,
+  InvestigationAssistant,
+  InvestigationOutcome,
+  InvestigationTraceRecord,
+  ToolInvoker,
+  ToolName,
+} from '@agentops/types';
 import { McpConnectionError, McpToolInvoker } from './mcp-tool-invoker.js';
 import { renderMissingFields, renderOutcome, renderUsage, shouldUseColor } from './renderer.js';
+import { appendTraceRecord, buildTraceRecord, generateRunId } from './trace-log.js';
 
 /**
  * Entrypoint de `npm run investigate -- [--engine=<kind>] "<pergunta>"` (RF1):
@@ -123,6 +131,51 @@ export function formatUsageLine(usage: LlmUsage): string {
   );
 }
 
+export interface InvestigateTraceInput {
+  tracePath: string | undefined;
+  outcome: InvestigationOutcome;
+  question: string;
+  engine: EngineKind;
+  model: string | null;
+  llmAssistant: LlmInvestigationAssistant | null;
+}
+
+/**
+ * Grava o trace de uma investigação avulsa (RF opt-in via `AGENTOPS_TRACE_LOG`):
+ * sem a env, ou com pergunta ambígua (RF3, nenhuma tool chamada), é um no-op.
+ * `runId === traceId` — uma investigação avulsa é seu próprio "run" (ao
+ * contrário do eval, que agrupa N traces sob um único runId).
+ * Falha ao gravar vira aviso em stderr; nunca lança (não muda o exit code do
+ * relatório que já foi impresso).
+ */
+export async function writeInvestigateTrace(input: InvestigateTraceInput): Promise<void> {
+  const { tracePath, outcome, question, engine, model, llmAssistant } = input;
+  if (tracePath === undefined || outcome.kind === 'clarification') {
+    return;
+  }
+  try {
+    const runId = generateRunId();
+    const record: InvestigationTraceRecord = {
+      ...buildTraceRecord({
+        source: 'investigate',
+        runId,
+        caseId: null,
+        question,
+        engine,
+        model,
+        outcome,
+        rounds: llmAssistant?.lastTrace ?? null,
+        usage: llmAssistant?.lastUsage ?? null,
+        evalResult: null,
+      }),
+      traceId: runId,
+    };
+    await appendTraceRecord(tracePath, record);
+  } catch (error) {
+    progress(`Aviso: falha ao gravar o trace de investigação: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function main(): Promise<number> {
   const useColor = shouldUseColor(process.stdout);
 
@@ -206,6 +259,16 @@ async function main(): Promise<number> {
     if (usage !== undefined && usage !== null) {
       progress(formatUsageLine(usage));
     }
+
+    await writeInvestigateTrace({
+      tracePath: process.env['AGENTOPS_TRACE_LOG'],
+      outcome,
+      question,
+      engine,
+      model: llm?.config.model ?? null,
+      llmAssistant,
+    });
+
     return 0;
   } catch (error) {
     if (error instanceof LlmEngineError) {

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { EngineArgError, formatTokenCount, resolveEngineArgs } from '@agentops/cli-agent/main';
 import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
 import { renderReport } from '@agentops/cli-agent/renderer';
+import { appendTraceRecord, buildTraceRecord, generateRunId } from '@agentops/cli-agent/trace-log';
 import { DeterministicInvestigationAssistant } from '@agentops/core';
 import {
   AnthropicChatAdapter,
@@ -14,7 +15,7 @@ import {
 } from '@agentops/llm-engine';
 import type { LlmUsage } from '@agentops/llm-engine';
 import { evalCaseSchema } from '@agentops/types';
-import type { EngineKind, EvalCase, EvalCaseResult, InvestigationAssistant } from '@agentops/types';
+import type { EngineKind, EvalCase, EvalCaseResult, InvestigationAssistant, RoundTrace } from '@agentops/types';
 import { DeterministicEvalScorer } from '../scoring/scorer.js';
 import { TextReportScorer } from '../scoring/text-scorer.js';
 
@@ -54,6 +55,12 @@ export interface RunEvalsOptions {
   out?: (line: string) => void;
   /** Destino do progresso (default: stderr). */
   err?: (line: string) => void;
+  /**
+   * Caminho do arquivo JSONL de trace (opt-in, mesmo padrão de `AGENTOPS_TRACE_LOG`
+   * em `investigate`). Sem valor, nenhum I/O de trace acontece. Lido da env
+   * apenas no bloco `invokedDirectly` — `runEvals()` em si permanece puro.
+   */
+  traceLogPath?: string;
 }
 
 /** Carrega e valida todos os `cases/*.json`, em ordem alfabética (determinístico). */
@@ -70,19 +77,24 @@ export async function loadCases(casesDir: string = DEFAULT_CASES_DIR): Promise<E
 /**
  * Monta o assistant do motor escolhido. No modo llm, config e system prompt
  * são resolvidos ANTES do spawn do server (mesma validação e mensagem da CLI:
- * `missing_api_key` falha rápido, sem processo filho órfão).
+ * `missing_api_key` falha rápido, sem processo filho órfão). O `model`
+ * resolvido volta junto — usado pelo trace (`AGENTOPS_LLM_MODEL` efetivo).
  */
-function buildAssistant(engine: EngineKind, invoker: () => McpToolInvoker): InvestigationAssistant {
+function buildAssistant(
+  engine: EngineKind,
+  invoker: () => McpToolInvoker,
+): { assistant: InvestigationAssistant; model: string | null } {
   if (engine === 'llm') {
     const config = resolveLlmEngineConfig(process.env);
-    return new LlmInvestigationAssistant(
+    const assistant = new LlmInvestigationAssistant(
       AnthropicChatAdapter.fromApiKey(config.apiKey),
       () => invoker().listTools(),
       config,
       buildSystemPrompt(),
     );
+    return { assistant, model: config.model };
   }
-  return new DeterministicInvestigationAssistant();
+  return { assistant: new DeterministicInvestigationAssistant(), model: null };
 }
 
 /** Executa todos os casos e imprime score por caso + resumo agregado (RF23/RF27). */
@@ -90,13 +102,24 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
   const out = options.out ?? ((line: string) => process.stdout.write(`${line}\n`));
   const err = options.err ?? ((line: string) => process.stderr.write(`${line}\n`));
   const engine = options.engine ?? 'deterministic';
+  const traceLogPath = options.traceLogPath;
+  // Um runId por execução de `runEvals()`, compartilhado pelos N casos —
+  // agrupa os traces de um mesmo eval (jq por `runId`).
+  const runId = generateRunId();
 
   const cases = await loadCases(options.casesDir);
   err(`Executando ${cases.length} caso(s) de eval…`);
 
   // Validação do modo llm (API key, skill) antes de spawnar o server.
   let invoker: McpToolInvoker;
-  const assistant = options.assistant ?? buildAssistant(engine, () => invoker);
+  let model: string | null = null;
+  const assistant =
+    options.assistant ??
+    (() => {
+      const built = buildAssistant(engine, () => invoker);
+      model = built.model;
+      return built.assistant;
+    })();
 
   const deterministicScorer = new DeterministicEvalScorer();
   const textScorer = new TextReportScorer();
@@ -137,6 +160,26 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
           : textScorer.score(evalCase, outcome.markdown);
       results.push(result);
       printCaseResult(result, out);
+
+      if (traceLogPath !== undefined) {
+        try {
+          const record = buildTraceRecord({
+            source: 'eval',
+            runId,
+            caseId: evalCase.id,
+            question: evalCase.question,
+            engine,
+            model,
+            outcome,
+            rounds: readLastTrace(assistant),
+            usage: readLastUsage(assistant),
+            evalResult: result,
+          });
+          await appendTraceRecord(traceLogPath, record);
+        } catch (error) {
+          err(`Aviso: falha ao gravar o trace do caso ${evalCase.id}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
     }
   } finally {
     await invoker.close().catch(() => {
@@ -158,6 +201,12 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
 function readLastUsage(assistant: InvestigationAssistant): LlmUsage | null {
   const usage = (assistant as { lastUsage?: LlmUsage | null }).lastUsage;
   return usage ?? null;
+}
+
+/** `lastTrace` do assistant concreto quando exposto (`LlmInvestigationAssistant`); null caso contrário (RF trace, motor deterministic ou fake de teste sem o campo). */
+function readLastTrace(assistant: InvestigationAssistant): RoundTrace[] | null {
+  const trace = (assistant as { lastTrace?: RoundTrace[] }).lastTrace;
+  return trace ?? null;
 }
 
 /** Score do caso + breakdown critério a critério — não apenas o agregado (RF27). */
@@ -190,7 +239,7 @@ if (invokedDirectly) {
   if (engine === null) {
     process.exitCode = 1;
   } else {
-    runEvals({ engine }).then(
+    runEvals({ engine, traceLogPath: process.env['AGENTOPS_TRACE_LOG'] }).then(
       (summary) => {
         process.exitCode = summary.passedCount === summary.results.length ? 0 : 1;
       },

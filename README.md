@@ -78,6 +78,7 @@ Variáveis de ambiente:
 | `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
 | `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
 | `AGENTOPS_LLM_CACHE` | `on` | Prompt caching do loop agêntico (V2.5). `off`/`false`/`0` desligam — útil para medir o custo antes/depois com o mesmo binário. |
+| `AGENTOPS_TRACE_LOG` | — (desligado) | Caminho do arquivo JSONL de trace (opt-in) — funciona com os dois engines, em `investigate` e em `eval`. Ver [Trace completo de investigação](#trace-completo-de-investigação-jsonl-opt-in) abaixo. |
 
 **Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). O motor não envia parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos da Messages API nos modelos atuais (`claude-sonnet-5`+) e retornam 400 se enviados — a reprodutibilidade do modo llm depende do contrato de formato no prompt, não de sampling. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
 
@@ -121,6 +122,50 @@ npm run eval:llm               # atalho: alias de --engine=llm (smoke opt-in, ga
 ```
 
 No modo llm o scoring continua 100% determinístico: o `TextReportScorer` avalia os **mesmos 5 grupos de critérios** sobre as seções do markdown (extraídas por título — sublinhado ou `##`), sem LLM-as-judge. Os casos JSON são byte-idênticos aos da V1.
+
+## Trace completo de investigação (JSONL, opt-in)
+
+```bash
+# Uma investigação avulsa
+AGENTOPS_TRACE_LOG=evals/runs/trace.jsonl npm run investigate -- --engine=llm "Investigue o checkout-api..."
+
+# Um eval inteiro: 3 registros no mesmo arquivo, um por caso, agrupáveis por runId
+AGENTOPS_LLM_MODEL=claude-sonnet-5 AGENTOPS_TRACE_LOG=evals/runs/trace.jsonl npm run eval -- --engine=llm
+```
+
+Com `AGENTOPS_TRACE_LOG` apontando para um caminho, cada investigação bem-sucedida (via `investigate` ou por caso de `eval`, nos dois engines) anexa uma linha JSON (`InvestigationTraceRecord`) ao arquivo — pergunta, engine, modelo, o `InvestigationOutcome` inteiro (report estruturado ou markdown + auditoria) e, no motor `llm`, o histórico rodada a rodada do loop agêntico (o que o modelo pediu, o que voltou de cada tool, uso de tokens por rodada). Quando o trace nasce de um caso de eval, o próprio registro carrega o `score`/critérios daquele caso.
+
+- Sem a env, zero I/O extra e stdout/stderr continuam byte-idênticos aos de hoje — o arquivo é um artefato **aditivo e opcional**, nunca versionado (`evals/runs/` está no `.gitignore`).
+- Uma investigação avulsa grava exatamente 1 registro (`runId === traceId`); uma execução de `npm run eval` grava um registro por caso, todos com o mesmo `runId` (agrupáveis via `jq`).
+- Pergunta ambígua (`clarification`) não gera trace — nenhuma tool é chamada.
+- Falha ao gravar (ex.: diretório sem permissão) vira aviso em stderr e **nunca** muda o exit code do relatório/score já produzido.
+- O diretório de destino é criado automaticamente se não existir; a escrita é sempre append-only (uma linha por chamada, nunca reescreve o arquivo).
+
+### Lendo um registro (`npm run trace:view`)
+
+Um registro completo é grande (relatório inteiro + rodadas + dados brutos de cada tool) — `npm run trace:view` isola um registro e monta um "replay" legível: cabeçalho, score/critérios do eval (quando existir), o loop agêntico rodada a rodada (cada `tool_use`/`tool_result` decodificado) e o resultado final (reaproveita o mesmo `renderReport` do `investigate`).
+
+```bash
+npm run trace:view -- evals/runs/trace.jsonl                                    # último registro do arquivo
+npm run trace:view -- evals/runs/trace.jsonl --case=case-001-database-timeout   # última ocorrência desse caso (--all para todas)
+npm run trace:view -- evals/runs/trace.jsonl --run=<runId>                      # todos os registros de um eval inteiro
+npm run trace:view -- evals/runs/trace.jsonl --trace=<traceId>                  # um registro específico
+```
+
+### Consultando os dados via `jq`
+
+```bash
+# Reconstruir um eval inteiro (N casos) por runId
+jq -c 'select(.runId == "2026-07-11T14-32-05-901Z-c103")' evals/runs/trace.jsonl
+
+# Score médio por modelo, olhando só os registros que vieram de eval
+jq -s '[.[] | select(.eval != null)] | group_by(.model) | map({model: .[0].model, avg: (map(.eval.score) | add / length)})' evals/runs/trace.jsonl
+
+# Quantas rodadas cada investigação usou, por modelo — para comparar eficiência do loop
+jq -c 'select(.usage != null) | {model, rounds: .usage.rounds, question}' evals/runs/trace.jsonl
+```
+
+Detalhes do formato do registro (schemas Zod, exemplo completo) em [`tasks/prd-incident-investigation-assistant/mini-spec-investigation-trace-log.md`](./tasks/prd-incident-investigation-assistant/mini-spec-investigation-trace-log.md).
 
 ## Testes e cobertura
 

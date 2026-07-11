@@ -1,6 +1,10 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { LlmEngineError } from '@agentops/llm-engine';
 import type { LlmUsage } from '@agentops/llm-engine';
+import { investigationTraceRecordSchema } from '@agentops/types';
 import type { InvestigationAssistant, InvestigationOutcome } from '@agentops/types';
 import { loadCases, runEvals } from './runner.js';
 import type { EvalRunSummary } from './runner.js';
@@ -235,4 +239,93 @@ describe('loadCases()', () => {
       expect(evalCase.must_not_include.length).toBeGreaterThan(0);
     }
   });
+});
+
+const CASE_IDS = ['case-001-database-timeout', 'case-002-payment-api-timeout', 'case-003-missing-data'];
+
+async function readTraceLines(path: string): Promise<unknown[]> {
+  const content = await readFile(path, 'utf8');
+  return content
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as unknown);
+}
+
+// Tarefa 2.0 (trace-log): AGENTOPS_TRACE_LOG opt-in em `runEvals()`
+describe('runEvals({ traceLogPath }) — trace opt-in', () => {
+  let dir: string;
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'agentops-eval-trace-'));
+  });
+
+  afterAll(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('motor deterministic, 3 casos reais → 3 linhas válidas, mesmo runId, caseId por linha, rounds/usage/model null', async () => {
+    const traceLogPath = join(dir, 'deterministic.jsonl');
+
+    await runEvals({ traceLogPath, out: () => {}, err: () => {} });
+
+    const records = await readTraceLines(traceLogPath);
+    expect(records).toHaveLength(3);
+    for (const record of records) {
+      expect(investigationTraceRecordSchema.safeParse(record).success).toBe(true);
+    }
+    const parsed = records.map((record) => investigationTraceRecordSchema.parse(record));
+    expect(parsed.map((record) => record.caseId)).toEqual(CASE_IDS);
+    expect(new Set(parsed.map((record) => record.runId)).size).toBe(1);
+    for (const record of parsed) {
+      expect(record.source).toBe('eval');
+      expect(record.engine).toBe('deterministic');
+      expect(record.model).toBeNull();
+      expect(record.rounds).toBeNull();
+      expect(record.usage).toBeNull();
+      expect(record.eval?.caseId).toBe(record.caseId);
+    }
+  }, 90_000);
+
+  it('motor llm com assistant fake, 3 casos → 3 registros, mesmo runId, eval igual ao EvalCaseResult do caso', async () => {
+    const traceLogPath = join(dir, 'llm-fake.jsonl');
+
+    const summary = await runEvals({
+      engine: 'llm',
+      assistant: new FakeLlmAssistant(),
+      traceLogPath,
+      out: () => {},
+      err: () => {},
+    });
+
+    const records = (await readTraceLines(traceLogPath)).map((record) => investigationTraceRecordSchema.parse(record));
+    expect(records).toHaveLength(3);
+    expect(records.map((record) => record.caseId)).toEqual(CASE_IDS);
+    expect(new Set(records.map((record) => record.runId)).size).toBe(1);
+    records.forEach((record, index) => {
+      expect(record.source).toBe('eval');
+      expect(record.engine).toBe('llm');
+      expect(record.eval).toEqual(summary.results[index]);
+    });
+  }, 90_000);
+
+  it('sem traceLogPath → nenhum arquivo criado (comportamento default inalterado)', async () => {
+    const untouchedPath = join(dir, 'nao-deve-existir.jsonl');
+
+    await runEvals({ out: () => {}, err: () => {} });
+
+    await expect(readFile(untouchedPath, 'utf8')).rejects.toThrow(/ENOENT/);
+  }, 90_000);
+
+  it('falha ao gravar o trace (diretório bloqueado por um arquivo) → aviso em stderr, summary inalterado', async () => {
+    const blockerFile = join(dir, 'blocker-file');
+    await writeFile(blockerFile, 'não é um diretório', 'utf8');
+    const brokenTraceLogPath = join(blockerFile, 'nested', 'trace.jsonl');
+    const errLines: string[] = [];
+
+    const summary = await runEvals({ traceLogPath: brokenTraceLogPath, out: () => {}, err: (line) => errLines.push(line) });
+
+    expect(summary.results).toHaveLength(3);
+    expect(summary.passedCount).toBe(summary.results.filter((result) => result.passed).length);
+    expect(errLines.filter((line) => line.includes('Aviso: falha ao gravar o trace do caso'))).toHaveLength(3);
+  }, 90_000);
 });
