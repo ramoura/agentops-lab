@@ -55,17 +55,19 @@ export interface LlmEngineConfig {
   model: string;
   maxTokens: number;
   maxRounds: number;
+  cacheEnabled: boolean;
 }
 
 export const DEFAULT_LLM_MODEL = 'claude-sonnet-5';
 export const DEFAULT_LLM_MAX_TOKENS = 4096;
 export const DEFAULT_LLM_MAX_ROUNDS = 16;
+export const DEFAULT_LLM_CACHE_ENABLED = true;
 
 /**
  * Resolve a config de `ANTHROPIC_API_KEY`, `AGENTOPS_LLM_MODEL`,
- * `AGENTOPS_LLM_MAX_TOKENS` e `AGENTOPS_LLM_MAX_ROUNDS`, aplicando defaults e
- * validando antes de tocar rede. Campos ausentes viram defaults explícitos —
- * nunca `undefined` silencioso.
+ * `AGENTOPS_LLM_MAX_TOKENS`, `AGENTOPS_LLM_MAX_ROUNDS` e
+ * `AGENTOPS_LLM_CACHE`, aplicando defaults e validando antes de tocar rede.
+ * Campos ausentes viram defaults explícitos — nunca `undefined` silencioso.
  */
 export function resolveLlmEngineConfig(env: NodeJS.ProcessEnv = process.env): LlmEngineConfig {
   const apiKey = env['ANTHROPIC_API_KEY'];
@@ -85,7 +87,32 @@ export function resolveLlmEngineConfig(env: NodeJS.ProcessEnv = process.env): Ll
     model,
     maxTokens: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_TOKENS', DEFAULT_LLM_MAX_TOKENS),
     maxRounds: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_ROUNDS', DEFAULT_LLM_MAX_ROUNDS),
+    cacheEnabled: resolveCacheEnabled(env),
   };
+}
+
+/**
+ * Liga/desliga do prompt caching por `AGENTOPS_LLM_CACHE` (default ligado).
+ * `on|true|1` → ligado; `off|false|0` → desligado (case-insensitive);
+ * qualquer outro valor → erro orientativo.
+ */
+function resolveCacheEnabled(env: NodeJS.ProcessEnv): boolean {
+  const raw = env['AGENTOPS_LLM_CACHE'];
+  if (raw === undefined || raw.trim() === '') {
+    return DEFAULT_LLM_CACHE_ENABLED;
+  }
+  const value = raw.trim().toLowerCase();
+  if (value === 'on' || value === 'true' || value === '1') {
+    return true;
+  }
+  if (value === 'off' || value === 'false' || value === '0') {
+    return false;
+  }
+  throw new LlmEngineError(
+    'invalid_config',
+    `AGENTOPS_LLM_CACHE aceita on|true|1 (liga) ou off|false|0 (desliga) — recebido: "${raw}". ` +
+      'Remova a variável para usar o default (on, prompt caching ligado).',
+  );
 }
 
 /** Inteiro > 0 de uma env, com default; valor inválido → erro orientativo. */

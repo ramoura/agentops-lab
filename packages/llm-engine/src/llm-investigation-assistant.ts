@@ -1,15 +1,38 @@
 import { InMemoryAuditLog } from '@agentops/core';
 import { TOOL_NAMES } from '@agentops/types';
-import type { InvestigationAssistant, InvestigationOutcome, McpToolDefinition, ToolInvoker, ToolName } from '@agentops/types';
-import type { AnthropicChatPort, AssistantContentBlock, ChatMessage, UserContentBlock } from './anthropic-chat.js';
+import type {
+  InvestigationAssistant,
+  InvestigationOutcome,
+  McpToolDefinition,
+  RoundContentBlock,
+  RoundToolResult,
+  RoundTrace,
+  ToolInvoker,
+  ToolName,
+} from '@agentops/types';
+import type {
+  AnthropicChatPort,
+  AssistantContentBlock,
+  CacheControl,
+  ChatMessage,
+  SystemBlock,
+  UserContentBlock,
+} from './anthropic-chat.js';
 import { LlmEngineError } from './engine-config.js';
 import type { LlmEngineConfig } from './engine-config.js';
 import { mapMcpToolsToAnthropic } from './tool-mapping.js';
 
-/** Agregado de tokens/rodadas de uma investigação (linha de custo em stderr). */
+/**
+ * Agregado de tokens/rodadas de uma investigação (linha de custo em stderr).
+ * A entrada total é `inputTokens + cacheCreationTokens + cacheReadTokens` —
+ * `inputTokens` carrega apenas a parcela não cacheada (após o último
+ * breakpoint); os campos de cache somam as rodadas.
+ */
 export interface LlmUsage {
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
   rounds: number;
 }
 
@@ -30,6 +53,8 @@ export interface LlmInvestigationHooks {
 export class LlmInvestigationAssistant implements InvestigationAssistant {
   /** Uso agregado da última investigação (null antes da primeira). */
   private usage: LlmUsage | null = null;
+  /** Trace rodada a rodada da última investigação (mesmo padrão do `lastUsage`). */
+  private trace: RoundTrace[] = [];
 
   constructor(
     private readonly chat: AnthropicChatPort,
@@ -43,13 +68,32 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
     return this.usage;
   }
 
+  get lastTrace(): RoundTrace[] {
+    return this.trace;
+  }
+
   async investigate(question: string, tools: ToolInvoker): Promise<InvestigationOutcome> {
     const anthropicTools = mapMcpToolsToAnthropic(await this.toolSource());
     const auditLog = new InMemoryAuditLog();
     const auditedTools = auditLog.wrap(tools);
-    const usage: LlmUsage = { inputTokens: 0, outputTokens: 0, rounds: 0 };
+    const usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, rounds: 0 };
     this.usage = usage;
+    const trace: RoundTrace[] = [];
+    this.trace = trace;
 
+    const { cacheEnabled } = this.config;
+    // Breakpoint estável (V2.5): no último bloco do system — pela ordem de
+    // renderização `tools → system → messages`, cacheia tools + system juntos.
+    // Marker no *bloco*, não no texto: o prompt é byte-idêntico com cache
+    // ligado ou desligado.
+    const system: SystemBlock[] = cacheEnabled
+      ? [{ type: 'text', text: this.systemPrompt, cache_control: { type: 'ephemeral' } }]
+      : [{ type: 'text', text: this.systemPrompt }];
+
+    // O histórico permanece sempre SEM markers: o breakpoint móvel é aplicado
+    // por request em uma cópia (`withMobileBreakpoint`), então o marker da
+    // rodada anterior some por construção — nunca mais de 2 por request
+    // (teto de 4 da API respeitado com folga).
     const messages: ChatMessage[] = [{ role: 'user', content: [{ type: 'text', text: question }] }];
 
     for (let round = 1; round <= this.config.maxRounds; round += 1) {
@@ -60,10 +104,10 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
         response = await this.chat.create({
           model: this.config.model,
           max_tokens: this.config.maxTokens,
-          system: this.systemPrompt,
+          system,
           tools: anthropicTools,
           tool_choice: { type: 'auto' },
-          messages,
+          messages: cacheEnabled ? withMobileBreakpoint(messages) : messages,
         });
       } catch (error) {
         throw new LlmEngineError(
@@ -77,6 +121,8 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
       usage.rounds = round;
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
+      usage.cacheReadTokens += response.usage.cache_read_input_tokens;
+      usage.cacheCreationTokens += response.usage.cache_creation_input_tokens;
 
       if (response.stop_reason === 'max_tokens') {
         throw new LlmEngineError(
@@ -88,12 +134,28 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
       }
 
       if (response.stop_reason === 'tool_use') {
+        const toolResults = await this.executeToolUses(response.content, auditedTools);
+        trace.push({
+          round,
+          assistantContent: response.content.map(toRoundContentBlock),
+          stopReason: response.stop_reason,
+          usage: { ...response.usage },
+          toolResults: toolResults.flatMap(toRoundToolResult),
+        });
         messages.push({ role: 'assistant', content: response.content });
-        messages.push({ role: 'user', content: await this.executeToolUses(response.content, auditedTools) });
+        messages.push({ role: 'user', content: toolResults });
         continue;
       }
 
       // end_turn (ou stop_reason equivalente): o markdown final do relatório.
+      trace.push({
+        round,
+        assistantContent: response.content.map(toRoundContentBlock),
+        stopReason: response.stop_reason,
+        usage: { ...response.usage },
+        toolResults: [],
+      });
+
       const markdown = response.content
         .filter((block): block is Extract<AssistantContentBlock, { type: 'text' }> => block.type === 'text')
         .map((block) => block.text)
@@ -157,4 +219,45 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
 
 function isKnownToolName(name: string): name is ToolName {
   return (TOOL_NAMES as readonly string[]).includes(name);
+}
+
+/** Bloco do trace a partir do bloco da resposta do modelo — descarta `cache_control` (nunca presente aqui). */
+function toRoundContentBlock(block: AssistantContentBlock): RoundContentBlock {
+  if (block.type === 'text') {
+    return { type: 'text', text: block.text };
+  }
+  return { type: 'tool_use', id: block.id, name: block.name, input: block.input };
+}
+
+/** Resultado do trace a partir do `tool_result` enviado ao modelo — descarta `cache_control`. */
+function toRoundToolResult(block: UserContentBlock): RoundToolResult[] {
+  if (block.type !== 'tool_result') {
+    return [];
+  }
+  return [{ type: 'tool_result', tool_use_id: block.tool_use_id, content: block.content, is_error: block.is_error }];
+}
+
+/**
+ * Breakpoint móvel (V2.5): cópia do histórico com `cache_control` no último
+ * bloco da última mensagem — o padrão multi-turn da Messages API (cada rodada
+ * lê o prefixo escrito pela anterior e estende o cache). Com múltiplos
+ * tool_use na rodada, o marker cai apenas no último `tool_result` da mensagem
+ * `user` seguinte. O histórico original não é tocado.
+ */
+function withMobileBreakpoint(messages: ChatMessage[]): ChatMessage[] {
+  const last = messages.at(-1);
+  if (last === undefined || last.content.length === 0) {
+    return messages;
+  }
+  const marked: ChatMessage =
+    last.role === 'user'
+      ? { role: 'user', content: markLastBlock(last.content) }
+      : { role: 'assistant', content: markLastBlock(last.content) };
+  return [...messages.slice(0, -1), marked];
+}
+
+function markLastBlock<T extends { cache_control?: CacheControl }>(blocks: T[]): T[] {
+  return blocks.map((block, index) =>
+    index === blocks.length - 1 ? { ...block, cache_control: { type: 'ephemeral' } } : block,
+  );
 }

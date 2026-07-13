@@ -52,6 +52,7 @@ export type ToolName = (typeof TOOL_NAMES)[number];
 /** Motores de investigação disponíveis (V2). `deterministic` é o default. */
 export const ENGINE_KINDS = ['deterministic', 'llm'] as const;
 export type EngineKind = (typeof ENGINE_KINDS)[number];
+export const engineKindSchema = z.enum(ENGINE_KINDS);
 
 /**
  * Definição de tool descoberta via `client.listTools()` do MCP (nome +

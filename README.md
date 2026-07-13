@@ -65,7 +65,7 @@ npm run investigate -- --engine=llm "Investigue por que o checkout-api teve aume
 No modo llm não há parser: a pergunta crua vai para o modelo com a skill [`investigate-incident`](./skills/investigate-incident/skill.md) como system prompt e as definições das 9 tools descobertas em runtime via `listTools()` do MCP. O loop agêntico é manual (`while stop_reason === 'tool_use'`) — cada rodada, tool_use e tool_result é visível e auditável, que é exatamente o objeto de estudo do lab. Perguntas mais livres que o regex da V1 passam a funcionar; pergunta sem serviço/período identificáveis produz um markdown declarando o que faltou, sem chamar tools de dados.
 
 - O relatório em stdout é o **markdown do modelo** (mesmas 7 seções do RF4) + a seção **"Tools chamadas" anexada por código** a partir do audit log — a auditoria nunca depende da honestidade do modelo.
-- Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 12.4k entrada · 1.8k saída · 3 rodadas`) vão para stderr; stdout redirecionado permanece limpo.
+- Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 8 entrada (34.2k cache lido · 16.4k cache escrito) · 4.0k saída · 4 rodada(s)`) vão para stderr; stdout redirecionado permanece limpo.
 - Sem `ANTHROPIC_API_KEY`, a CLI falha rápido com orientação (exit 1), **antes** de spawnar o server MCP.
 
 Variáveis de ambiente:
@@ -77,8 +77,25 @@ Variáveis de ambiente:
 | `AGENTOPS_LLM_MODEL` | `claude-sonnet-5` | Modelo da Messages API. |
 | `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
 | `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
+| `AGENTOPS_LLM_CACHE` | `on` | Prompt caching do loop agêntico (V2.5). `off`/`false`/`0` desligam — útil para medir o custo antes/depois com o mesmo binário. |
+| `AGENTOPS_TRACE_LOG` | — (desligado) | Caminho do arquivo JSONL de trace (opt-in) — funciona com os dois engines, em `investigate` e em `eval`. Ver [Trace completo de investigação](#trace-completo-de-investigação-jsonl-opt-in) abaixo. |
 
 **Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). O motor não envia parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos da Messages API nos modelos atuais (`claude-sonnet-5`+) e retornam 400 se enviados — a reprodutibilidade do modo llm depende do contrato de formato no prompt, não de sampling. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
+
+### Prompt caching (V2.5)
+
+O loop agêntico reenvia o prompt quase completo a cada rodada — system prompt, definições das 9 tools e histórico crescente. O motor marca **dois breakpoints de cache** por request (`cache_control: {type: "ephemeral"}`, TTL de 5 min): um **estável** no system (pela ordem `tools → system → messages`, cacheia tools + system juntos — compartilhado inclusive entre investigações) e um **móvel** no fim do histórico (cada rodada lê o prefixo escrito pela anterior). Ligado por default; `AGENTOPS_LLM_CACHE=off` desliga sem mudar um byte do prompt.
+
+Números medidos (2026-07-09, mesma pergunta, mesmo binário, 4 rodadas, `claude-sonnet-5`):
+
+| Execução | Entrada (preço cheio, 1×) | Cache lido (0,1×) | Cache escrito (1,25×) | Saída | Custo de entrada relativo |
+| --- | --- | --- | --- | --- | --- |
+| `AGENTOPS_LLM_CACHE=off` | 50.7k | — | — | 4.2k | 1,00× |
+| default (cache ligado) | 8 | 34.2k | 16.4k | 4.0k | **0,47×** (−53%) |
+
+A redução de ~53% é o piso — primeira investigação, cache frio (todo o prefixo pago como escrita a 1,25×). Com leituras dominando (mais rodadas, ou execuções em sequência reutilizando o prefixo estável — o caso do eval), o ganho tende à faixa de 70–80%.
+
+**Troubleshooting — cache frio**: o primeiro passo de diagnóstico no modo llm é a linha de custo em stderr. `cache lido == 0` numa execução **multi-rodada** significa invalidação silenciosa: ou o prefixo mudou entre rodadas (qualquer byte alterado antes de um breakpoint invalida o cache dali em diante — ex.: ordem das tools do `listTools()` variando), ou o prefixo está abaixo do mínimo cacheável (1.024 tokens no `claude-sonnet-5`) — em ambos os casos a API ignora o marker **sem erro**, e só a métrica acusa.
 
 **Gap do RF6 como objeto de estudo**: no motor determinístico, "nenhum fato fora de tool" é garantido por código; no modo llm o modelo *pode* alucinar um fato — a garantia vira instrução de prompt. As mitigações são em camadas (guardrails no system prompt, linha `Fonte:` obrigatória por evidência, `must_not_include` nos casos de eval e auditoria completa para conferência manual tool a tool), e observar esse gap na prática é parte do propósito do lab.
 
@@ -105,6 +122,50 @@ npm run eval:llm               # atalho: alias de --engine=llm (smoke opt-in, ga
 ```
 
 No modo llm o scoring continua 100% determinístico: o `TextReportScorer` avalia os **mesmos 5 grupos de critérios** sobre as seções do markdown (extraídas por título — sublinhado ou `##`), sem LLM-as-judge. Os casos JSON são byte-idênticos aos da V1.
+
+## Trace completo de investigação (JSONL, opt-in)
+
+```bash
+# Uma investigação avulsa
+AGENTOPS_TRACE_LOG=evals/runs/trace.jsonl npm run investigate -- --engine=llm "Investigue o checkout-api..."
+
+# Um eval inteiro: 3 registros no mesmo arquivo, um por caso, agrupáveis por runId
+AGENTOPS_LLM_MODEL=claude-sonnet-5 AGENTOPS_TRACE_LOG=evals/runs/trace.jsonl npm run eval -- --engine=llm
+```
+
+Com `AGENTOPS_TRACE_LOG` apontando para um caminho, cada investigação bem-sucedida (via `investigate` ou por caso de `eval`, nos dois engines) anexa uma linha JSON (`InvestigationTraceRecord`) ao arquivo — pergunta, engine, modelo, o `InvestigationOutcome` inteiro (report estruturado ou markdown + auditoria) e, no motor `llm`, o histórico rodada a rodada do loop agêntico (o que o modelo pediu, o que voltou de cada tool, uso de tokens por rodada). Quando o trace nasce de um caso de eval, o próprio registro carrega o `score`/critérios daquele caso.
+
+- Sem a env, zero I/O extra e stdout/stderr continuam byte-idênticos aos de hoje — o arquivo é um artefato **aditivo e opcional**, nunca versionado (`evals/runs/` está no `.gitignore`).
+- Uma investigação avulsa grava exatamente 1 registro (`runId === traceId`); uma execução de `npm run eval` grava um registro por caso, todos com o mesmo `runId` (agrupáveis via `jq`).
+- Pergunta ambígua (`clarification`) não gera trace — nenhuma tool é chamada.
+- Falha ao gravar (ex.: diretório sem permissão) vira aviso em stderr e **nunca** muda o exit code do relatório/score já produzido.
+- O diretório de destino é criado automaticamente se não existir; a escrita é sempre append-only (uma linha por chamada, nunca reescreve o arquivo).
+
+### Lendo um registro (`npm run trace:view`)
+
+Um registro completo é grande (relatório inteiro + rodadas + dados brutos de cada tool) — `npm run trace:view` isola um registro e monta um "replay" legível: cabeçalho, score/critérios do eval (quando existir), o loop agêntico rodada a rodada (cada `tool_use`/`tool_result` decodificado) e o resultado final (reaproveita o mesmo `renderReport` do `investigate`).
+
+```bash
+npm run trace:view -- evals/runs/trace.jsonl                                    # último registro do arquivo
+npm run trace:view -- evals/runs/trace.jsonl --case=case-001-database-timeout   # última ocorrência desse caso (--all para todas)
+npm run trace:view -- evals/runs/trace.jsonl --run=<runId>                      # todos os registros de um eval inteiro
+npm run trace:view -- evals/runs/trace.jsonl --trace=<traceId>                  # um registro específico
+```
+
+### Consultando os dados via `jq`
+
+```bash
+# Reconstruir um eval inteiro (N casos) por runId
+jq -c 'select(.runId == "2026-07-11T14-32-05-901Z-c103")' evals/runs/trace.jsonl
+
+# Score médio por modelo, olhando só os registros que vieram de eval
+jq -s '[.[] | select(.eval != null)] | group_by(.model) | map({model: .[0].model, avg: (map(.eval.score) | add / length)})' evals/runs/trace.jsonl
+
+# Quantas rodadas cada investigação usou, por modelo — para comparar eficiência do loop
+jq -c 'select(.usage != null) | {model, rounds: .usage.rounds, question}' evals/runs/trace.jsonl
+```
+
+Detalhes do formato do registro (schemas Zod, exemplo completo) em [`tasks/prd-incident-investigation-assistant/mini-spec-investigation-trace-log.md`](./tasks/prd-incident-investigation-assistant/mini-spec-investigation-trace-log.md).
 
 ## Testes e cobertura
 

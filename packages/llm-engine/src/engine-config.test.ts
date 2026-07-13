@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_LLM_CACHE_ENABLED,
   DEFAULT_LLM_MAX_ROUNDS,
   DEFAULT_LLM_MAX_TOKENS,
   DEFAULT_LLM_MODEL,
@@ -40,6 +41,7 @@ describe('resolveLlmEngineConfig', () => {
       model: DEFAULT_LLM_MODEL,
       maxTokens: DEFAULT_LLM_MAX_TOKENS,
       maxRounds: DEFAULT_LLM_MAX_ROUNDS,
+      cacheEnabled: DEFAULT_LLM_CACHE_ENABLED,
     });
     expect(config.model).toBe('claude-sonnet-5');
     expect(config.maxTokens).toBe(4096);
@@ -79,6 +81,55 @@ describe('resolveLlmEngineConfig', () => {
     expect(() =>
       resolveLlmEngineConfig({ ANTHROPIC_API_KEY: 'sk-ant-teste', AGENTOPS_LLM_MAX_ROUNDS: value }),
     ).toThrowError(expect.objectContaining({ code: 'invalid_config' }));
+  });
+
+  // ---------------------------------------------------------------------------
+  // Test cases 1–4 da techspec V2.5 (AGENTOPS_LLM_CACHE)
+  // ---------------------------------------------------------------------------
+
+  // Teste 1
+  it.each([undefined, '', '   '])('AGENTOPS_LLM_CACHE ausente/vazia (%j) → cacheEnabled: true (default ligado)', (value) => {
+    const env: NodeJS.ProcessEnv = { ANTHROPIC_API_KEY: 'sk-ant-teste' };
+    if (value !== undefined) {
+      env['AGENTOPS_LLM_CACHE'] = value;
+    }
+    expect(resolveLlmEngineConfig(env).cacheEnabled).toBe(true);
+    expect(DEFAULT_LLM_CACHE_ENABLED).toBe(true);
+  });
+
+  // Teste 2 — liga/desliga explícito, case-insensitive
+  it.each(['on', 'true', '1', 'ON', 'True'])('AGENTOPS_LLM_CACHE=%s → cacheEnabled: true', (value) => {
+    expect(
+      resolveLlmEngineConfig({ ANTHROPIC_API_KEY: 'sk-ant-teste', AGENTOPS_LLM_CACHE: value }).cacheEnabled,
+    ).toBe(true);
+  });
+
+  it.each(['off', 'false', '0', 'OFF', 'False'])('AGENTOPS_LLM_CACHE=%s → cacheEnabled: false', (value) => {
+    expect(
+      resolveLlmEngineConfig({ ANTHROPIC_API_KEY: 'sk-ant-teste', AGENTOPS_LLM_CACHE: value }).cacheEnabled,
+    ).toBe(false);
+  });
+
+  // Teste 3
+  it('AGENTOPS_LLM_CACHE inválida → invalid_config orientativo citando os valores aceitos e o default', () => {
+    expect.assertions(6);
+    try {
+      resolveLlmEngineConfig({ ANTHROPIC_API_KEY: 'sk-ant-teste', AGENTOPS_LLM_CACHE: 'talvez' });
+    } catch (error) {
+      expect(error).toBeInstanceOf(LlmEngineError);
+      expect((error as LlmEngineError).code).toBe('invalid_config');
+      expect((error as LlmEngineError).message).toContain('AGENTOPS_LLM_CACHE');
+      expect((error as LlmEngineError).message).toContain('on|true|1');
+      expect((error as LlmEngineError).message).toContain('off|false|0');
+      expect((error as LlmEngineError).message).toContain('default (on');
+    }
+  });
+
+  // Teste 4 — regressão: ordem dos erros preservada
+  it('ANTHROPIC_API_KEY continua sendo validada antes de AGENTOPS_LLM_CACHE (ordem dos erros)', () => {
+    expect(() => resolveLlmEngineConfig({ AGENTOPS_LLM_CACHE: 'talvez' })).toThrowError(
+      expect.objectContaining({ code: 'missing_api_key' }),
+    );
   });
 
   it('a API key nunca aparece em mensagens de erro de config', () => {

@@ -3,3 +3,5 @@ coverage/
 dist/
 *.log
 .idea/
+*.tsbuildinfo
+evals/runs/

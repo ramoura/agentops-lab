@@ -1,6 +1,6 @@
 # Roadmap — AgentOps Lab
 
-A v1 é 100% local, determinística e read-only; a V2 (motor LLM) está **entregue**. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfícies dos SDKs MCP e Anthropic isoladas em arquivos únicos).
+A v1 é 100% local, determinística e read-only; a V2 (motor LLM) e a V2.5 (prompt caching) estão **entregues**. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfícies dos SDKs MCP e Anthropic isoladas em arquivos únicos).
 
 ## Migração do SDK MCP v1.x → v2 (exercício de estudo)
 
@@ -57,14 +57,14 @@ Quarto adapter atrás da mesma interface `InvestigationAssistant`, falando o dia
 - **Riscos**: qualidade de tool calling varia muito entre modelos (o `TextReportScorer` existe para acusar isso); dois dialetos de API para manter frente a upstreams que evoluem (o caso do `temperature` da V2 aconteceria em dobro); prompt caching difere por provedor (explícito na Anthropic, automático na OpenAI, dependente do provedor no OpenRouter) — relevante porque o loop reenvia o histórico a cada rodada; OpenRouter adiciona um terceiro na cadeia de dados.
 - **Registrar em `decisions.md`**: adapter dedicado por dialeto (em vez de generalizar a porta da V2 para um formato neutro) e o trade-off assumido.
 
-### V2.5 — Prompt caching no loop agêntico
+### V2.5 — Prompt caching no loop agêntico ✅ (entregue)
 
-O loop reenvia o histórico completo a cada rodada: numa investigação típica (~57k tokens de entrada, 5 rodadas), o prompt é pago quase inteiro 5×. A Anthropic oferece cache por prefixo (`cache_control: {type: "ephemeral"}`), com leitura a ~0,1× do preço de entrada.
+Especificação: [`techspec-v2.5.md`](../tasks/prd-incident-investigation-assistant/techspec-v2.5.md). A pergunta de AgentOps era: quanto custa a "amnésia" de um loop agêntico sem cache?
 
-- **O que muda**: breakpoints de cache no system prompt e nas definições de tools (conteúdo estável, renderizado antes das mensagens) e no último turno do histórico; o `ChatUsage` da porta passa a capturar `cache_creation_input_tokens`/`cache_read_input_tokens`; a linha de custo em stderr ganha o detalhe de cache (`Tokens: 57.3k entrada (48.2k cache) · …`).
-- **Pergunta de AgentOps**: quanto custa a "amnésia" de um loop agêntico sem cache? Medir custo por investigação antes/depois (expectativa: redução de ~70–80% do custo de entrada) e aprender a mecânica de invalidação por prefixo — qualquer byte alterado no system prompt/tools invalida tudo dali em diante.
-- **Custo de montar**: baixo (~1 dia) — mudança localizada na porta e no assistant; o `FakeAnthropicChat` valida a presença dos breakpoints sem rede.
-- **Armadilhas conhecidas**: prefixo mínimo cacheável por modelo (abaixo disso o marker é silenciosamente ignorado); conteúdo volátil (timestamps, ids) antes do breakpoint mata o cache; verificar sempre por `cache_read_input_tokens > 0`, nunca assumir.
+- **Entregue**: dois breakpoints de cache por request (`cache_control: {type: "ephemeral"}`, TTL 5 min) — um **estável** no último bloco do system (pela ordem `tools → system → messages`, cacheia tools + system juntos) e um **móvel** no último bloco da última mensagem do histórico (cada rodada lê o prefixo escrito pela anterior). `ChatUsage` captura `cache_creation_input_tokens`/`cache_read_input_tokens`; a linha de custo da CLI detalha o cache e o eval reporta o agregado por caso em stderr; opt-out por `AGENTOPS_LLM_CACHE=off` (mesmo binário, prompt byte-idêntico).
+- **Medido** (2026-07-09, mesma pergunta, mesmo binário, 4 rodadas, `claude-sonnet-5`): sem cache `50.7k entrada · 4.2k saída`; com cache `8 entrada (34.2k cache lido · 16.4k cache escrito) · 4.0k saída` — **−53% no custo de entrada** (write a 1,25×, read a 0,1×) já na primeira investigação, com cache frio.
+- **Análise do desvio**: a expectativa era ~70–80%; com cache frio e 4 rodadas, a escrita (1,25×) responde por ~86% do custo restante — o piso medido é −53%, e a faixa esperada vale quando as leituras dominam (mais rodadas, ou investigações em sequência lendo o prefixo estável — o caso do eval). Break-even já na 2ª rodada.
+- **Aprendizado central**: invalidação e mínimo cacheável (1.024 tokens) são **silenciosos** — sem a métrica em stderr, "cache ligado" é indistinguível de "cache quebrado" (`cache lido == 0` é o sinal; troubleshooting no README). Decisão registrada em [`decisions.md`](./decisions.md) D13.
 
 ### V2.6 — Trajectory evals: pontuar o caminho, não só o relatório
 
@@ -128,7 +128,7 @@ O `executeToolUses` executa os blocos `tool_use` de uma rodada em ordem, sequenc
 - **Custo de montar**: baixo — mudança localizada no assistant; os testes 3 e 7 da techspec-v2 (múltiplos tool_use, auditoria com seq incremental) já cobrem o contrato e precisam continuar verdes.
 - **Risco**: concorrência sobre o `McpToolInvoker` (uma conexão stdio) — verificar se o SDK MCP serializa chamadas ou se é preciso limitar a concorrência no invoker.
 
-> **Priorização sugerida** (valor de estudo ÷ esforço): V2.5 (caching) → V2.6 (trajectory) → V2.7 (red-team, pré-requisito da V3) → V2.8 (structured A/B) → V2.9 (flake) → V2.10 (judge) → V2.11 (skill A/B) → V2.12 (paralelismo). Nenhuma é compromisso — são candidatas registradas; cada uma, se promovida, ganha techspec própria.
+> **Priorização sugerida** (valor de estudo ÷ esforço): ~~V2.5 (caching)~~ ✅ entregue → V2.6 (trajectory) → V2.7 (red-team, pré-requisito da V3) → V2.8 (structured A/B) → V2.9 (flake) → V2.10 (judge) → V2.11 (skill A/B) → V2.12 (paralelismo). Nenhuma é compromisso — são candidatas registradas; cada uma, se promovida, ganha techspec própria.
 
 ## V3 — Providers reais de observabilidade
 

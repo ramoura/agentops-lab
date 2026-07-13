@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { investigationTraceRecordSchema } from '@agentops/types';
 import { SECTION_TITLES } from '../src/renderer.js';
 
 /**
@@ -151,5 +152,38 @@ describe('saída redirecionada para arquivo', () => {
     expectSectionsInOrder(content);
     expect(content).not.toMatch(ANSI_RE);
     expect(content.trim().length).toBeGreaterThan(0);
+  }, 90_000);
+});
+
+// Tarefa 2.0 (trace-log): AGENTOPS_TRACE_LOG opt-in em `npm run investigate`
+describe('AGENTOPS_TRACE_LOG=<tmp>/trace.jsonl npm run investigate', () => {
+  let outDir: string;
+
+  beforeAll(async () => {
+    outDir = await mkdtemp(join(tmpdir(), 'agentops-e2e-trace-'));
+  });
+
+  afterAll(async () => {
+    await rm(outDir, { recursive: true, force: true });
+  });
+
+  it('sai com código 0, stdout inalterado (mesmas seções do RF4) e grava 1 registro válido no arquivo de trace', async () => {
+    const tracePath = join(outDir, 'trace.jsonl');
+    const result = await runInvestigate(['--', QUESTION_CASE_001], { AGENTOPS_TRACE_LOG: tracePath });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    // stdout continua sendo só o relatório (RF4/RF7) — o trace é escrito em
+    // arquivo separado, sem contaminar stdout/stderr do relatório.
+    expectSectionsInOrder(result.stdout);
+    expect(result.stdout).toContain('get_error_summary');
+
+    const content = await readFile(tracePath, 'utf8');
+    const lines = content.trim().split('\n');
+    expect(lines).toHaveLength(1);
+    const record = investigationTraceRecordSchema.parse(JSON.parse(lines[0] ?? ''));
+    expect(record.source).toBe('investigate');
+    expect(record.caseId).toBeNull();
+    expect(record.runId).toBe(record.traceId);
+    expect(record.engine).toBe('deterministic');
   }, 90_000);
 });
