@@ -1,4 +1,4 @@
-import type { EvalCase, EvalCaseResult, EvalCriterionResult, EvalScorer, InvestigationReport } from '@agentops/types';
+import type { EvalCase, EvalCaseResult, EvalCriterionResult, EvalScorer, FindingSpec, InvestigationReport } from '@agentops/types';
 
 /**
  * Scorer 100% determinístico (RF26): matching de termos case/acento-insensível
@@ -38,21 +38,38 @@ export function normalize(text: string): string {
     .toLowerCase();
 }
 
-function scoreFinding(finding: string, normalizedText: string): EvalCriterionResult {
-  const passed = normalizedText.includes(normalize(finding));
+/** Rótulo canônico de um FindingSpec — 1ª variante; nome estável do critério (RF27). */
+export function primaryVariant(spec: FindingSpec): string {
+  return Array.isArray(spec) ? spec[0]! : spec;
+}
+
+/** Candidatos de matching any-of — string única vira lista de 1 elemento. */
+export function variants(spec: FindingSpec): string[] {
+  return Array.isArray(spec) ? spec : [spec];
+}
+
+/**
+ * V1 não ganha tolerância de fraseado (V2.1): o motor determinístico gera
+ * texto por template fixo, sem variação de fraseado — compara sempre a
+ * variante primária, mesmo quando `spec` traz aliases.
+ */
+function scoreFinding(spec: FindingSpec, normalizedText: string): EvalCriterionResult {
+  const label = primaryVariant(spec);
+  const passed = normalizedText.includes(normalize(label));
   return {
-    name: `finding:${finding}`,
+    name: `finding:${label}`,
     passed,
-    details: passed ? 'encontrado no relatório' : `"${finding}" não aparece no relatório`,
+    details: passed ? 'encontrado no relatório' : `"${label}" não aparece no relatório`,
   };
 }
 
-function scoreForbidden(term: string, normalizedText: string): EvalCriterionResult {
-  const passed = !normalizedText.includes(normalize(term));
+function scoreForbidden(spec: FindingSpec, normalizedText: string): EvalCriterionResult {
+  const label = primaryVariant(spec);
+  const passed = !normalizedText.includes(normalize(label));
   return {
-    name: `proibido:${term}`,
+    name: `proibido:${label}`,
     passed,
-    details: passed ? 'ausente' : `termo proibido "${term}" presente no relatório`,
+    details: passed ? 'ausente' : `termo proibido "${label}" presente no relatório`,
   };
 }
 

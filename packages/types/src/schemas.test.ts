@@ -6,6 +6,7 @@ import {
   errorSummarySchema,
   evalCaseResultSchema,
   evalCaseSchema,
+  findingSpecSchema,
   getDeploymentEventsInputSchema,
   getErrorSummaryInputSchema,
   getLatencySummaryInputSchema,
@@ -506,6 +507,29 @@ describe('contratos de relatório, auditoria e eval', () => {
     };
     expect(evalCaseResultSchema.safeParse(result).success).toBe(true);
     expect(evalCaseResultSchema.safeParse({ ...result, score: 1.5 }).success).toBe(false);
+  });
+
+  // Teste 77
+  it('findingSpecSchema valida string única e string[] não vazio; rejeita ambos vazios', () => {
+    expect(findingSpecSchema.safeParse('Sem registros').success).toBe(true);
+    expect(findingSpecSchema.safeParse(['Sem registros', 'Não há registros']).success).toBe(true);
+    expect(findingSpecSchema.safeParse('').success).toBe(false);
+    expect(findingSpecSchema.safeParse([]).success).toBe(false);
+  });
+
+  // Teste 78
+  it('evalCaseSchema.parse() aceita EvalCase misto (entradas string e array) sem erro', () => {
+    const evalCase = {
+      id: 'case-003-missing-data',
+      question: 'Investigue por que o inventory-api teve erro 5xx entre 10h e 10h30 em 2026-07-08',
+      expected_findings: ['inventory-api', ['Sem registros', 'Não há registros', 'nenhum registro'], 'baixa'],
+      must_not_include: ['DatabaseTimeoutException', ['POST /checkout', 'endpoint /checkout']],
+    };
+    const result = evalCaseSchema.safeParse(evalCase);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(evalCase);
+    }
   });
 });
 

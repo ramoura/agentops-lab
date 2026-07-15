@@ -3,8 +3,8 @@
   "question": "Investigue por que o inventory-api teve erro 5xx entre 10h e 10h30 em 2026-07-08",
   "expected_findings": [
     "inventory-api",
-    "Sem registros",
-    "Sem métricas de latência",
+    ["Sem registros", "Não há registros", "nenhum registro"],
+    ["Sem métricas de latência", "sem dados de latência", "não há métricas de latência"],
     "baixa"
   ],
   "must_not_include": [

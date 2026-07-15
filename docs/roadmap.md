@@ -1,6 +1,6 @@
 # Roadmap — AgentOps Lab
 
-A v1 é 100% local, determinística e read-only; a V2 (motor LLM) e a V2.5 (prompt caching) estão **entregues**. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfícies dos SDKs MCP e Anthropic isoladas em arquivos únicos).
+A v1 é 100% local, determinística e read-only; a V2 (motor LLM), a V2.1 (tolerância de fraseado) e a V2.5 (prompt caching) estão **entregues**. As fases abaixo são direção de evolução — a arquitetura atual foi desenhada para suportá-las **sem reestruturação** (interfaces estáveis de provider, contratos únicos em `types`, superfícies dos SDKs MCP e Anthropic isoladas em arquivos únicos).
 
 ## Migração do SDK MCP v1.x → v2 (exercício de estudo)
 
@@ -24,9 +24,13 @@ Especificação: [`techspec-v2.md`](../tasks/prd-incident-investigation-assistan
 
 Experimentos que reutilizam os contratos existentes (`InvestigationAssistant`, `ToolInvoker`, `InvestigationOutcome`, eval harness) — nenhum exige reestruturação; cada um vira um novo `--engine=<kind>` ou um ajuste localizado.
 
-### V2.1 — Tolerância de fraseado no scorer
+### V2.1 — Tolerância de fraseado no scorer ✅ (entregue)
 
-Pendência assumida da V2 (descartada de propósito naquela fase): tolerância de sinônimos/fraseado nos `expected_findings` do modo llm e, se a taxa de flake incomodar, um segundo scorer. Motivação concreta observada na validação da V2: o case-003 reprovou com o modelo escrevendo "Não há registros de erro" em vez do termo literal `Sem registros` — comportamento correto, fraseado diferente (risco documentado na techspec-v2, "Riscos conhecidos").
+Especificação: [`techspec-v2.1.md`](../tasks/prd-incident-investigation-assistant/techspec-v2.1.md).
+
+- **Entregue**: `FindingSpec = string | string[]` permite aliases curados com matching *any-of* em `expected_findings` e `must_not_include`; casos legados só com strings continuam compatíveis.
+- **Entregue**: o `TextReportScorer` aceita qualquer variante e informa no breakdown qual delas casou, mantendo a variante primária como nome estável do critério; o `DeterministicEvalScorer` considera somente a primária e preserva o comportamento da V1.
+- **Entregue**: o `case-003-missing-data` cobre os fraseados reais "Não há registros" e "não há métricas de latência", fechando o flake observado na V2. Um segundo scorer continua fora do escopo e reservado à V2.10.
 
 ### V2.2 — Motor via Tool Runner do SDK (`--engine=tool-runner`)
 

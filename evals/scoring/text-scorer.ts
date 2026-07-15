@@ -1,6 +1,6 @@
 import { SECTION_TITLES } from '@agentops/cli-agent/renderer';
-import type { EvalCase, EvalCaseResult, EvalCriterionResult } from '@agentops/types';
-import { normalize } from './scorer.js';
+import type { EvalCase, EvalCaseResult, EvalCriterionResult, FindingSpec } from '@agentops/types';
+import { normalize, primaryVariant, variants } from './scorer.js';
 
 /**
  * Caminho text-mode do scoring (V2, RF26): os mesmos 5 grupos de critérios do
@@ -135,22 +135,38 @@ export class TextReportScorer {
   }
 }
 
-function scoreFinding(finding: string, normalizedText: string): EvalCriterionResult {
-  const passed = normalizedText.includes(normalize(finding));
-  return {
-    name: `finding:${finding}`,
-    passed,
-    details: passed ? 'encontrado no relatório' : `"${finding}" não aparece no relatório`,
-  };
+/**
+ * Matching any-of (V2.1): passa se qualquer variante aparecer no texto.
+ * `details` cita a variante que bateu apenas quando `spec` tem mais de 1
+ * variante — sem alias, o texto fica byte-idêntico ao formato pré-V2.1.
+ */
+function scoreFinding(spec: FindingSpec, normalizedText: string): EvalCriterionResult {
+  const label = primaryVariant(spec);
+  const candidates = variants(spec);
+  const matched = candidates.find((candidate) => normalizedText.includes(normalize(candidate)));
+  const passed = matched !== undefined;
+
+  let details: string;
+  if (passed) {
+    details = candidates.length > 1 ? `encontrado no relatório via variante "${matched}"` : 'encontrado no relatório';
+  } else {
+    details =
+      candidates.length > 1
+        ? `"${label}" não aparece no relatório (nenhuma das ${candidates.length} variantes encontrada)`
+        : `"${label}" não aparece no relatório`;
+  }
+
+  return { name: `finding:${label}`, passed, details };
 }
 
-function scoreForbidden(term: string, normalizedText: string): EvalCriterionResult {
-  const passed = !normalizedText.includes(normalize(term));
-  return {
-    name: `proibido:${term}`,
-    passed,
-    details: passed ? 'ausente' : `termo proibido "${term}" presente no relatório`,
-  };
+function scoreForbidden(spec: FindingSpec, normalizedText: string): EvalCriterionResult {
+  const label = primaryVariant(spec);
+  const candidates = variants(spec);
+  const matched = candidates.find((candidate) => normalizedText.includes(normalize(candidate)));
+  const passed = matched === undefined;
+
+  const details = passed ? 'ausente' : `termo proibido "${matched}" presente no relatório`;
+  return { name: `proibido:${label}`, passed, details };
 }
 
 /**

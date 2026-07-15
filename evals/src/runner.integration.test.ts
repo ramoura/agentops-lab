@@ -29,6 +29,8 @@ describe('runEvals() sobre os 3 casos', () => {
     });
 
     expect(summary.results).toHaveLength(3);
+    expect(summary.passedCount).toBe(3);
+    expect(summary.averageScore).toBe(1);
     expect(summary.results.map((result) => result.caseId)).toEqual([
       'case-001-database-timeout',
       'case-002-payment-api-timeout',
@@ -102,7 +104,7 @@ function scriptedMarkdown(question: string): string {
   }
   return [
     '## Resumo executivo',
-    'Sem registros para o inventory-api na janela consultada.',
+    'Não há registros de erro para o inventory-api na janela consultada.',
     '## Evidências encontradas',
     '## Hipótese principal',
     'Nenhuma hipótese pôde ser formulada.',
@@ -111,8 +113,8 @@ function scriptedMarkdown(question: string): string {
     '## Próximos passos seguros',
     '1. Confirmar o nome do serviço e a janela consultada.',
     '## Dados faltantes',
-    '- Sem registros de erro para o inventory-api.',
-    '- Sem métricas de latência para a janela.',
+    '- Não há registros de erro para o inventory-api.',
+    '- Não há métricas de latência para a janela.',
     '## Confiança da análise',
     'baixa',
   ].join('\n');
@@ -145,6 +147,10 @@ describe('runEvals({ engine: "llm", assistant: fake }) sobre os 3 casos', () => 
     const output = outLines.join('\n');
     // Breakdown por critério (RF27) vindo do TextReportScorer (linha "Fonte:")
     expect(output).toContain('[OK] finding:DatabaseTimeoutException');
+    expect(output).toContain('[OK] finding:Sem registros — encontrado no relatório via variante "Não há registros"');
+    expect(output).toContain(
+      '[OK] finding:Sem métricas de latência — encontrado no relatório via variante "não há métricas de latência"',
+    );
     expect(output).toContain('[OK] cita_evidencias');
     expect(output).toContain('[OK] proximos_passos_seguros');
     // Resumo indica o engine usado
@@ -238,6 +244,18 @@ describe('loadCases()', () => {
       expect(evalCase.expected_findings.length).toBeGreaterThan(0);
       expect(evalCase.must_not_include.length).toBeGreaterThan(0);
     }
+
+    const missingDataCase = cases[2];
+    expect(missingDataCase?.expected_findings).toContainEqual([
+      'Sem registros',
+      'Não há registros',
+      'nenhum registro',
+    ]);
+    expect(missingDataCase?.expected_findings).toContainEqual([
+      'Sem métricas de latência',
+      'sem dados de latência',
+      'não há métricas de latência',
+    ]);
   });
 });
 

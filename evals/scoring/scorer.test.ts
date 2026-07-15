@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderReport } from '@agentops/cli-agent/renderer';
 import type { EvalCase, EvalCriterionResult, InvestigationReport } from '@agentops/types';
-import { DeterministicEvalScorer } from './scorer.js';
+import { DeterministicEvalScorer, primaryVariant, variants } from './scorer.js';
 
 const scorer = new DeterministicEvalScorer();
 
@@ -60,7 +60,7 @@ function criterion(name: string, result: ReturnType<DeterministicEvalScorer['sco
   return found;
 }
 
-// Teste 52
+// Testes 52–59 (regressão do teste 81: nenhuma alteração de import/comportamento nesta seção)
 describe('findings esperados', () => {
   it('finding presente no texto passa, com matching case/acento-insensível', () => {
     const report = makeReport();
@@ -238,6 +238,53 @@ describe('determinismo (RF26)', () => {
     const evalCase = makeCase({
       expected_findings: ['DatabaseTimeoutException', 'p99-inexistente'],
       must_not_include: ['certeza absoluta'],
+    });
+
+    const first = scorer.score(evalCase, report, rendered);
+    const second = scorer.score(evalCase, report, rendered);
+
+    expect(second).toEqual(first);
+  });
+});
+
+// Teste 79
+describe('primaryVariant', () => {
+  it('string única → ela mesma; array → 1º elemento', () => {
+    expect(primaryVariant('Sem registros')).toBe('Sem registros');
+    expect(primaryVariant(['Sem registros', 'Não há registros', 'nenhum registro'])).toBe('Sem registros');
+  });
+});
+
+// Teste 80
+describe('variants', () => {
+  it('string única → array de 1 elemento; array → mesmo conteúdo, mesma ordem', () => {
+    expect(variants('Sem registros')).toEqual(['Sem registros']);
+    expect(variants(['Sem registros', 'Não há registros'])).toEqual(['Sem registros', 'Não há registros']);
+  });
+});
+
+// Teste 82
+describe('DeterministicEvalScorer — FindingSpec em array (sem tolerância, V1)', () => {
+  it('texto contendo só a 2ª variante falha — só a variante primária é considerada', () => {
+    const report = makeReport({ summary: 'Não há registros de erro para o inventory-api na janela consultada.' });
+    const result = scorer.score(
+      makeCase({ expected_findings: [['Sem registros', 'Não há registros', 'nenhum registro']] }),
+      report,
+      renderReport(report, false),
+    );
+
+    const item = criterion('finding:Sem registros', result);
+    expect(item.passed).toBe(false);
+    expect(item.details).toContain('Sem registros');
+  });
+
+  // Teste 83
+  it('determinismo com entradas em array: score() chamado duas vezes → toEqual', () => {
+    const report = makeReport();
+    const rendered = renderReport(report, false);
+    const evalCase = makeCase({
+      expected_findings: [['DatabaseTimeoutException', 'timeout de banco']],
+      must_not_include: [['drop table', 'truncate table']],
     });
 
     const first = scorer.score(evalCase, report, rendered);

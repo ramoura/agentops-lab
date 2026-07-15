@@ -1,12 +1,17 @@
 import { z } from 'zod';
 import type { InvestigationReport } from './report.js';
 
+/** Uma entrada de expected_findings/must_not_include: termo único ou variantes aceitas (any-of). */
+export type FindingSpec = string | string[];
+
+export const findingSpecSchema = z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]);
+
 /** Caso de teste do eval harness (`evals/cases/*.json`, RF25). */
 export const evalCaseSchema = z.object({
   id: z.string().min(1),
   question: z.string().min(1),
-  expected_findings: z.array(z.string().min(1)),
-  must_not_include: z.array(z.string().min(1)),
+  expected_findings: z.array(findingSpecSchema),
+  must_not_include: z.array(findingSpecSchema),
 });
 export type EvalCase = z.infer<typeof evalCaseSchema>;
 

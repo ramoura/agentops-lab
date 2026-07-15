@@ -252,3 +252,115 @@ describe('score e passed (paridade de agregação com a V1)', () => {
     expect(perfect.passed).toBe(true);
   });
 });
+
+// Testes 84–89 (V2.1 — tolerância de fraseado, matching any-of)
+describe('findings com FindingSpec em array (V2.1 — matching any-of)', () => {
+  // Teste 84
+  it('variante não-primária presente no texto → passa; details cita a variante entre aspas', () => {
+    const markdown = GOOD_MARKDOWN.replace('DatabaseTimeoutException', 'timeout de banco de dados');
+    const result = scorer.score(
+      { ...baseCase, expected_findings: [['DatabaseTimeoutException', 'timeout de banco de dados']] },
+      markdown,
+    );
+
+    const finding = result.criteria.find((criterion) => criterion.name === 'finding:DatabaseTimeoutException');
+    expect(finding?.passed).toBe(true);
+    expect(finding?.details).toBe('encontrado no relatório via variante "timeout de banco de dados"');
+  });
+
+  // Teste 85
+  it('nenhuma variante presente → falha; details cita o rótulo canônico e quantas variantes foram tentadas', () => {
+    const result = scorer.score(
+      { ...baseCase, expected_findings: [['ConnectionPoolExhaustedException', 'esgotamento do pool de conexões']] },
+      GOOD_MARKDOWN,
+    );
+
+    const finding = result.criteria.find((criterion) => criterion.name === 'finding:ConnectionPoolExhaustedException');
+    expect(finding?.passed).toBe(false);
+    expect(finding?.details).toContain('ConnectionPoolExhaustedException');
+    expect(finding?.details).toContain('2 variantes');
+  });
+
+  // Teste 86
+  it('finding como string única (regressão): criteria/details byte-idênticos aos testes 29–35', () => {
+    const markdown = GOOD_MARKDOWN.replace('DatabaseTimeoutException', 'DATABASETIMEOUTEXCEPTION');
+    const result = scorer.score(baseCase, markdown);
+
+    const finding = result.criteria.find((criterion) => criterion.name === 'finding:DatabaseTimeoutException');
+    expect(finding?.passed).toBe(true);
+    expect(finding?.details).toBe('encontrado no relatório');
+  });
+
+  // Teste 87
+  it('criterion.name usa sempre a variante primária, independente de qual variante bateu', () => {
+    const markdown = GOOD_MARKDOWN.replace('DatabaseTimeoutException', 'não há registros de erro');
+    const result = scorer.score(
+      { ...baseCase, expected_findings: [['Sem registros', 'não há registros de erro', 'nenhum registro']] },
+      markdown,
+    );
+
+    expect(result.criteria.some((criterion) => criterion.name === 'finding:Sem registros')).toBe(true);
+    expect(result.criteria.some((criterion) => criterion.name.startsWith('finding:não há registros'))).toBe(false);
+  });
+
+  // Teste 88
+  it('must_not_include como array: qualquer variante presente reprova; nenhuma presente → aprova', () => {
+    const withForbidden = GOOD_MARKDOWN.replace(
+      'Regressão introduzida pelo deploy das 10:03 (confiança alta).',
+      'Rollback executado automaticamente às 10:03.',
+    );
+    const failing = scorer.score(
+      { ...baseCase, must_not_include: [['rollback automático', 'rollback executado automaticamente']] },
+      withForbidden,
+    );
+    const forbidden = failing.criteria.find((criterion) => criterion.name === 'proibido:rollback automático');
+    expect(forbidden?.passed).toBe(false);
+    expect(forbidden?.details).toContain('rollback executado automaticamente');
+
+    const passing = scorer.score(
+      { ...baseCase, must_not_include: [['rollback automático', 'rollback executado automaticamente']] },
+      GOOD_MARKDOWN,
+    );
+    expect(passing.criteria.find((criterion) => criterion.name === 'proibido:rollback automático')?.passed).toBe(true);
+  });
+
+  // Teste 89
+  it('regressão do flake original (D11): "Não há registros de erro" bate o alias do case-003', () => {
+    const markdown = [
+      '## Resumo executivo',
+      'Não há registros de erro para o inventory-api na janela consultada.',
+      '',
+      '## Evidências encontradas',
+      '',
+      '## Hipótese principal',
+      'Nenhuma hipótese pôde ser formulada — sem dados de latência para o inventory-api na janela.',
+      '',
+      '## Próximos passos seguros',
+      '1. Confirmar o nome do serviço e a janela consultada.',
+      '',
+      '## Dados faltantes',
+      '- Não há registros de erro para o inventory-api na janela consultada.',
+      '- Sem dados de latência para o inventory-api na janela.',
+      '',
+      '## Confiança da análise',
+      'baixa',
+    ].join('\n');
+
+    const case003 = {
+      id: 'case-003-missing-data',
+      question: 'Investigue por que o inventory-api teve erro 5xx entre 10h e 10h30 em 2026-07-08',
+      expected_findings: [
+        'inventory-api',
+        ['Sem registros', 'Não há registros', 'nenhum registro'],
+        ['Sem métricas de latência', 'sem dados de latência', 'não há métricas de latência'],
+        'baixa',
+      ],
+      must_not_include: ['DatabaseTimeoutException', 'PaymentGatewayTimeoutException', 'POST /checkout', 'deploy da versão'],
+    };
+
+    const result = scorer.score(case003, markdown);
+
+    expect(result.criteria.find((criterion) => criterion.name === 'finding:Sem registros')?.passed).toBe(true);
+    expect(result.criteria.find((criterion) => criterion.name === 'finding:Sem métricas de latência')?.passed).toBe(true);
+  });
+});
