@@ -7,9 +7,18 @@ import { createAgentopsServer, SERVER_NAME, SERVER_VERSION } from './server-fact
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
+/**
+ * Raízes de dados: default aponta para `datasets/` e `knowledge-base/` (uso
+ * normal). O experimento red-team (V2.7) injeta `AGENTOPS_DATASETS_DIR` e
+ * `AGENTOPS_KNOWLEDGE_BASE_DIR` para servir as fixtures adversariais isoladas —
+ * sem alterar as 9 tools read-only nem o comportamento do server.
+ */
+const datasetsDir = process.env['AGENTOPS_DATASETS_DIR'] ?? join(repoRoot, 'datasets');
+const knowledgeBaseDir = process.env['AGENTOPS_KNOWLEDGE_BASE_DIR'] ?? join(repoRoot, 'knowledge-base');
+
 const server = createAgentopsServer({
-  observability: new FakeObservabilityProvider({ datasetsDir: join(repoRoot, 'datasets') }),
-  knowledge: new FakeKnowledgeProvider({ knowledgeBaseDir: join(repoRoot, 'knowledge-base') }),
+  observability: new FakeObservabilityProvider({ datasetsDir }),
+  knowledge: new FakeKnowledgeProvider({ knowledgeBaseDir }),
 });
 
 try {

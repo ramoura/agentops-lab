@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { ToolInvocationError } from '@agentops/core';
 import { TOOL_NAMES } from '@agentops/types';
@@ -38,6 +38,13 @@ export class McpConnectionError extends Error {
 export interface McpToolInvokerOptions {
   /** Destino do stderr do server (logs de diagnóstico). Default: `inherit`. */
   serverStderr?: 'inherit' | 'ignore';
+  /**
+   * Variáveis extras para o processo filho do server, mescladas sobre o ambiente
+   * default seguro do SDK (`getDefaultEnvironment`). Usado pelo runner red-team
+   * (V2.7) para injetar `AGENTOPS_DATASETS_DIR`/`AGENTOPS_KNOWLEDGE_BASE_DIR` e
+   * servir as fixtures adversariais isoladas. Nunca propaga `ANTHROPIC_API_KEY`.
+   */
+  env?: Record<string, string>;
 }
 
 /**
@@ -55,6 +62,7 @@ export class McpToolInvoker implements ToolInvoker {
       command: process.execPath,
       args: DEFAULT_SERVER_ARGS,
       stderr: options.serverStderr ?? 'inherit',
+      env: options.env === undefined ? undefined : { ...getDefaultEnvironment(), ...options.env },
     });
     const client = new Client({ name: 'agentops-cli', version: '0.1.0' });
     try {

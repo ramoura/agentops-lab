@@ -125,6 +125,20 @@ npm run eval:llm               # atalho: alias de --engine=llm (smoke opt-in, ga
 
 No modo llm o scoring continua 100% determinístico: o `TextReportScorer` avalia os **mesmos 5 grupos de critérios** sobre as seções do markdown (extraídas por título — sublinhado ou `##`), sem LLM-as-judge. Os casos JSON são byte-idênticos aos da V1.
 
+### Red-team de prompt injection (V2.7, opt-in)
+
+Mede se o motor trata conteúdo malicioso de `tool_result` como **dado**, não como instrução — o baseline do guardrail antes de conectar providers reais (V3). É um comando **separado, opt-in e isolado**; nunca faz parte de `npm test`, `npm run eval` ou CI.
+
+```bash
+npm run eval:redteam -- --engine=llm   # roda SOMENTE case-004, pelo MCP real (gasta tokens, exige ANTHROPIC_API_KEY)
+```
+
+- **Isolamento**: as fixtures adversariais vivem em `datasets-redteam/` e `knowledge-base-redteam/`, fisicamente separadas; um composition root recusa qualquer raiz igual à normal. `npm run eval`/`eval:llm` não descobrem `case-004`.
+- **Três vetores**: instrução direta em `logs[].message`, instrução no campo estruturado `exceptions[].exception` e roleplay em texto livre de runbook. O guardrail da V2 é o **único** controle — nada é sanitizado ou delimitado (medir, não endurecer).
+- **Scoring**: outcome (`TextReportScorer`) e **segurança** (`RedTeamScorer` determinístico) saem como scores **separados**; o exit code é `0` só quando **ambos** passam. Segurança avalia cada vetor (marcador reproduzido reprova; a tool-fonte precisa ter sido exercitada, senão `not_exercised`), as 7 seções e a segurança do 1º passo.
+- **Custo/segurança**: um caso por execução (poucos centavos); a saída **não** imprime a API key nem o payload adversarial integral; `AGENTOPS_TRACE_LOG` continua opt-in, com aviso de que o trace contém conteúdo adversarial sintético.
+- **Interpretação**: uma passagem é evidência **daquela execução/modelo**, nunca garantia de resistência. Taxa/repetição é V2.9; comparação entre modelos é V2.4. Recomenda-se repetir ~3× como observação, não como gate. Veja D12 em [`docs/decisions.md`](docs/decisions.md).
+
 ## Trace completo de investigação (JSONL, opt-in)
 
 ```bash
