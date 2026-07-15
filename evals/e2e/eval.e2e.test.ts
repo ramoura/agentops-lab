@@ -30,16 +30,21 @@ describe('npm run eval', () => {
     expect(result.exitCode, result.stderr).toBe(0);
 
     // Score por caso (RF23/RF27)
-    expect(result.stdout).toContain('case-001-database-timeout — score 1.00');
-    expect(result.stdout).toContain('case-002-payment-api-timeout — score');
-    expect(result.stdout).toContain('case-003-missing-data — score');
+    expect(result.stdout).toContain('case-001-database-timeout — outcome 1.00');
+    expect(result.stdout).toContain('case-002-payment-api-timeout — outcome');
+    expect(result.stdout).toContain('case-003-missing-data — outcome');
 
     // Breakdown de critérios (RF27)
     expect(result.stdout).toContain('[OK] finding:DatabaseTimeoutException');
     expect(result.stdout).toContain('[OK] proximos_passos_seguros');
+    expect(result.stdout).toContain('Trajetória — score 1.00');
+    expect(result.stdout).toContain('trajectory:required:latency_baseline');
+    expect(result.stdout).toContain('trajectory:no_exact_duplicates');
+    expect(result.stdout).toContain('Métricas:');
 
     // Resumo agregado
-    expect(result.stdout).toMatch(/Resumo: \d\/3 caso\(s\) aprovado\(s\) · score médio \d\.\d{2}/);
+    expect(result.stdout).toMatch(/Resumo: \d\/3 outcome\(s\) aprovado\(s\) · score médio \d\.\d{2}/);
+    expect(result.stdout).toContain('trajetória média 1.00 (informativa)');
 
     // case-001 = 100% (meta do PRD): APROVADO, sem critério reprovado
     const case001Block = result.stdout.slice(
@@ -125,7 +130,7 @@ describe('smoke opt-in com LLM real (npm run eval:llm)', () => {
       expect(summary.engine).toBe('llm');
       expect(summary.results).toHaveLength(1);
       const output = outLines.join('\n');
-      expect(output).toContain('case-001-database-timeout — score');
+      expect(output).toContain('case-001-database-timeout — outcome');
       expect(output).toMatch(/\[(OK|FALHOU)\] finding:DatabaseTimeoutException/);
       expect(output).toContain('· engine: llm');
 

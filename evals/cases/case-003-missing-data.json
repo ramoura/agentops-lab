@@ -12,5 +12,17 @@
     "PaymentGatewayTimeoutException",
     "POST /checkout",
     "deploy da versão"
-  ]
+  ],
+  "expected_trajectory": {
+    "required_calls": [
+      { "id": "error_summary", "tool": "get_error_summary", "params": { "service": "inventory-api" }, "max_occurrences": 1 },
+      { "id": "top_exceptions", "tool": "get_top_exceptions", "params": { "service": "inventory-api" }, "max_occurrences": 1 },
+      { "id": "error_logs", "tool": "get_recent_logs", "params": { "service": "inventory-api", "level": "ERROR" }, "max_occurrences": 1 },
+      { "id": "latency_incident", "tool": "get_latency_summary", "params": { "service": "inventory-api", "from": "2026-07-08T10:00:00-03:00", "to": "2026-07-08T10:30:00-03:00" }, "max_occurrences": 1 },
+      { "id": "deploy_check", "tool": "get_deployment_events", "params": { "service": "inventory-api" }, "max_occurrences": 1 }
+    ],
+    "order_constraints": [],
+    "forbid_exact_duplicates": true,
+    "max_calls": 9
+  }
 }

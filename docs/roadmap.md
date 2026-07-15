@@ -70,11 +70,11 @@ Especificação: [`techspec-v2.5.md`](../tasks/prd-incident-investigation-assist
 - **Análise do desvio**: a expectativa era ~70–80%; com cache frio e 4 rodadas, a escrita (1,25×) responde por ~86% do custo restante — o piso medido é −53%, e a faixa esperada vale quando as leituras dominam (mais rodadas, ou investigações em sequência lendo o prefixo estável — o caso do eval). Break-even já na 2ª rodada.
 - **Aprendizado central**: invalidação e mínimo cacheável (1.024 tokens) são **silenciosos** — sem a métrica em stderr, "cache ligado" é indistinguível de "cache quebrado" (`cache lido == 0` é o sinal; troubleshooting no README). Decisão registrada em [`decisions.md`](./decisions.md) D13.
 
-### V2.6 — Trajectory evals: pontuar o caminho, não só o relatório
+### V2.6 — Trajectory evals: pontuar o caminho, não só o relatório ✅ (entregue)
 
 O audit log (RF7) já é a trajetória estruturada da investigação — seq, tool, params, resultado, duração. Hoje o eval só pontua o *outcome* (o relatório); a distinção outcome vs. process eval é tema central de avaliação de agentes.
 
-- **O que muda**: um `TrajectoryScorer` determinístico sobre `ToolCallRecord[]`, com critérios como: consultou latência com janela de baseline? Consultou deploys antes de formular hipótese de regressão? Fez chamadas redundantes (mesma tool + mesmos params)? Quantas rodadas/chamadas usou vs. um teto razoável por caso? Respeitou a ordem lógica da skill (dados antes de knowledge base)?
+- **Entregue**: `TrajectoryScorer` determinístico sobre o audit canônico dos dois motores, expectativas opcionais nos casos, matching parcial, ocorrências, precedências por `seq`, duplicatas, teto e métricas. Breakdown e média são informativos; outcome, gate e traces legados permanecem compatíveis.
 - **Pergunta de AgentOps**: dois motores podem chegar ao mesmo relatório por caminhos muito diferentes — qual é a qualidade do *processo*? Também detecta regressões invisíveis no outcome (ex.: o modelo passa a fazer 2× mais chamadas e o relatório continua bom, mas o custo dobrou).
 - **Custo de montar**: baixo — o dado já existe e é determinístico; são critérios novos no breakdown do eval (RF27), possivelmente com um bloco `expected_trajectory` opcional nos casos.
 - **Cuidado**: critérios de trajetória são mais frágeis a mudanças legítimas de estratégia do modelo — separá-los do gate de aprovação (informativos primeiro, bloqueantes só quando estáveis).
@@ -132,7 +132,7 @@ O `executeToolUses` executa os blocos `tool_use` de uma rodada em ordem, sequenc
 - **Custo de montar**: baixo — mudança localizada no assistant; os testes 3 e 7 da techspec-v2 (múltiplos tool_use, auditoria com seq incremental) já cobrem o contrato e precisam continuar verdes.
 - **Risco**: concorrência sobre o `McpToolInvoker` (uma conexão stdio) — verificar se o SDK MCP serializa chamadas ou se é preciso limitar a concorrência no invoker.
 
-> **Priorização sugerida** (valor de estudo ÷ esforço): ~~V2.5 (caching)~~ ✅ entregue → V2.6 (trajectory) → V2.7 (red-team, pré-requisito da V3) → V2.8 (structured A/B) → V2.9 (flake) → V2.10 (judge) → V2.11 (skill A/B) → V2.12 (paralelismo). Nenhuma é compromisso — são candidatas registradas; cada uma, se promovida, ganha techspec própria.
+> **Priorização sugerida** (valor de estudo ÷ esforço): ~~V2.5 (caching)~~ ✅ entregue → ~~V2.6 (trajectory)~~ ✅ entregue → V2.7 (red-team, pré-requisito da V3) → V2.8 (structured A/B) → V2.9 (flake) → V2.10 (judge) → V2.11 (skill A/B) → V2.12 (paralelismo). Nenhuma é compromisso — são candidatas registradas; cada uma, se promovida, ganha techspec própria.
 
 ## V3 — Providers reais de observabilidade
 

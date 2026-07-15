@@ -112,7 +112,9 @@ Executa os 3 casos de `evals/cases/` pelo **mesmo caminho da CLI** (client MCP r
 - `separa_fato_de_hipotese` — seções distintas e não vazias (ou ausência declarada);
 - `proximos_passos_seguros` — lista não vazia, 1º passo nunca destrutivo.
 
-A saída traz o breakdown de critérios por caso (o que passou e o que falhou) e o resumo agregado, indicando o engine usado. O eval é o monitor de regressão do projeto: mudanças em engine/datasets/skill devem manter o `case-001` em 100%. Exit code ≠ 0 quando algum caso reprova.
+A saída separa **outcome**, o único gate do relatório, de **Trajetória — INFORMATIVO**, que avalia o audit (tools, parâmetros, precedências parciais, duplicatas e teto). Trajetória abaixo de 1 nunca reprova o comando; erro de configuração ou outcome reprovado mantém exit code diferente de zero. A média informativa considera somente casos configurados.
+
+O bloco opcional `expected_trajectory` aceita `required_calls`, `order_constraints`, `forbid_exact_duplicates` (default `true`) e `max_calls`. Parâmetros esperados usam matching por subconjunto recursivo e as precedências referenciam IDs de chamadas e comparam seu `seq`, sem impor uma sequência total. Casos sem o bloco permanecem válidos e não exibem score artificial.
 
 Os dois motores rodam pelos mesmos casos:
 
@@ -227,7 +229,7 @@ O padrão completo está na skill [`desenvolver-mcp-tools`](./.claude/skills/des
 
 ### Adicionar um caso de eval
 
-1. Crie `evals/cases/case-00X-<nome>.json` com `id`, `question`, `expected_findings` e `must_not_include` (use termos técnicos estáveis: nomes de exception, endpoints, "p99", "deploy").
+1. Crie `evals/cases/case-00X-<nome>.json` com `id`, `question`, `expected_findings` e `must_not_include` (use termos técnicos estáveis: nomes de exception, endpoints, "p99", "deploy"). Opcionalmente adicione `expected_trajectory` com expectativas parciais e conservadoras.
 2. Se o caso usa um cenário novo, adicione o dataset correspondente antes.
 3. Rode `npm run eval` — o runner descobre os casos automaticamente; opcionalmente registre um golden em `evals/expected-answers/`.
 

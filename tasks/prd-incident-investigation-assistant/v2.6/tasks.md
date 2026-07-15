@@ -6,4 +6,4 @@
 ## Tarefas
 
 - [x] 1.0 Implementar contratos e scorer determinístico de trajetória
-- [ ] 2.0 Integrar trajectory eval ao Eval Harness e documentar a entrega
+- [x] 2.0 Integrar trajectory eval ao Eval Harness e documentar a entrega

@@ -15,9 +15,19 @@ import {
 } from '@agentops/llm-engine';
 import type { LlmUsage } from '@agentops/llm-engine';
 import { evalCaseSchema } from '@agentops/types';
-import type { EngineKind, EvalCase, EvalCaseResult, InvestigationAssistant, RoundTrace } from '@agentops/types';
+import type {
+  EngineKind,
+  EvalCase,
+  EvalCaseResult,
+  InvestigationAssistant,
+  InvestigationOutcome,
+  RoundTrace,
+  ToolCallRecord,
+  TrajectoryEvalResult,
+} from '@agentops/types';
 import { DeterministicEvalScorer } from '../scoring/scorer.js';
 import { TextReportScorer } from '../scoring/text-scorer.js';
+import { DeterministicTrajectoryScorer } from '../scoring/trajectory-scorer.js';
 
 /**
  * Runner do eval harness (`npm run eval -- [--engine=<kind>]`, RF23): carrega
@@ -32,13 +42,21 @@ import { TextReportScorer } from '../scoring/text-scorer.js';
 const DEFAULT_CASES_DIR = fileURLToPath(new URL('../cases', import.meta.url));
 
 export interface EvalRunSummary {
-  results: EvalCaseResult[];
+  results: EvalRunCaseResult[];
   /** Casos com todos os critérios aprovados (`passed === true`). */
   passedCount: number;
   /** Média dos scores por caso, 2 casas. */
   averageScore: number;
+  /** Média das trajetórias configuradas; null quando nenhum caso as declara. */
+  averageTrajectoryScore: number | null;
   /** Motor usado na execução (indicado na linha de resumo). */
   engine: EngineKind;
+}
+
+/** Outcome canônico (gate) composto com a avaliação informativa da trajetória. */
+export interface EvalRunCaseResult {
+  outcome: EvalCaseResult;
+  trajectory: TrajectoryEvalResult | null;
 }
 
 export interface RunEvalsOptions {
@@ -123,11 +141,12 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
 
   const deterministicScorer = new DeterministicEvalScorer();
   const textScorer = new TextReportScorer();
+  const trajectoryScorer = new DeterministicTrajectoryScorer();
 
   err('Iniciando o agentops-server (MCP via stdio)…');
   invoker = await McpToolInvoker.connect({ serverStderr: 'inherit' });
 
-  const results: EvalCaseResult[] = [];
+  const results: EvalRunCaseResult[] = [];
   try {
     for (const evalCase of cases) {
       err(`→ ${evalCase.id}`);
@@ -154,10 +173,17 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
       }
       // Scoring 100% determinístico nos dois modos (RF26): report estruturado
       // → scorer da V1 (byte-idêntico); markdown do LLM → scorer text-mode.
-      const result =
+      const outcomeResult =
         outcome.kind === 'report'
           ? deterministicScorer.score(evalCase, outcome.report, renderReport(outcome.report, false))
           : textScorer.score(evalCase, outcome.markdown);
+      const result: EvalRunCaseResult = {
+        outcome: outcomeResult,
+        trajectory:
+          evalCase.expected_trajectory === undefined
+            ? null
+            : trajectoryScorer.score(evalCase.expected_trajectory, auditFromOutcome(outcome)),
+      };
       results.push(result);
       printCaseResult(result, out);
 
@@ -173,7 +199,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
             outcome,
             rounds: readLastTrace(assistant),
             usage: readLastUsage(assistant),
-            evalResult: result,
+            evalResult: outcomeResult,
           });
           await appendTraceRecord(traceLogPath, record);
         } catch (error) {
@@ -187,14 +213,41 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
     });
   }
 
-  const passedCount = results.filter((result) => result.passed).length;
+  const passedCount = results.filter((result) => result.outcome.passed).length;
   const averageScore =
-    results.length === 0 ? 0 : Math.round((results.reduce((sum, result) => sum + result.score, 0) / results.length) * 100) / 100;
+    results.length === 0
+      ? 0
+      : Math.round((results.reduce((sum, result) => sum + result.outcome.score, 0) / results.length) * 100) / 100;
+  const configuredTrajectories = results.flatMap((result) =>
+    result.trajectory === null ? [] : [result.trajectory],
+  );
+  const averageTrajectoryScore =
+    configuredTrajectories.length === 0
+      ? null
+      : Math.round(
+          (configuredTrajectories.reduce((sum, trajectory) => sum + trajectory.score, 0) /
+            configuredTrajectories.length) *
+            100,
+        ) / 100;
 
   out('');
-  out(`Resumo: ${passedCount}/${results.length} caso(s) aprovado(s) · score médio ${averageScore.toFixed(2)} · engine: ${engine}`);
+  const trajectorySummary =
+    averageTrajectoryScore === null
+      ? ''
+      : ` · trajetória média ${averageTrajectoryScore.toFixed(2)} (informativa)`;
+  out(
+    `Resumo: ${passedCount}/${results.length} outcome(s) aprovado(s) · score médio ${averageScore.toFixed(2)}` +
+      `${trajectorySummary} · engine: ${engine}`,
+  );
 
-  return { results, passedCount, averageScore, engine };
+  return { results, passedCount, averageScore, averageTrajectoryScore, engine };
+}
+
+/** Audit canônico de cada variante; nunca consulta instrumentação auxiliar do assistant. */
+export function auditFromOutcome(outcome: InvestigationOutcome): ToolCallRecord[] {
+  if (outcome.kind === 'report') return outcome.report.audit;
+  if (outcome.kind === 'markdown') return outcome.audit;
+  return [];
 }
 
 /** `lastUsage` do assistant concreto quando exposto (`LlmInvestigationAssistant`); null caso contrário. */
@@ -210,13 +263,33 @@ function readLastTrace(assistant: InvestigationAssistant): RoundTrace[] | null {
 }
 
 /** Score do caso + breakdown critério a critério — não apenas o agregado (RF27). */
-function printCaseResult(result: EvalCaseResult, out: (line: string) => void): void {
-  const approved = result.criteria.filter((criterion) => criterion.passed).length;
-  const status = result.passed ? 'APROVADO' : 'REPROVADO';
+export function printCaseResult(result: EvalRunCaseResult, out: (line: string) => void): void {
+  const { outcome, trajectory } = result;
+  const approved = outcome.criteria.filter((criterion) => criterion.passed).length;
+  const status = outcome.passed ? 'APROVADO' : 'REPROVADO';
   out('');
-  out(`${result.caseId} — score ${result.score.toFixed(2)} (${approved}/${result.criteria.length} critérios) — ${status}`);
-  for (const criterion of result.criteria) {
+  out(
+    `${outcome.caseId} — outcome ${outcome.score.toFixed(2)} (${approved}/${outcome.criteria.length} critérios) — ${status}`,
+  );
+  for (const criterion of outcome.criteria) {
     out(`  [${criterion.passed ? 'OK' : 'FALHOU'}] ${criterion.name} — ${criterion.details}`);
+  }
+  if (trajectory !== null) {
+    const trajectoryApproved = trajectory.criteria.filter((criterion) => criterion.passed).length;
+    out(
+      `  Trajetória — score ${trajectory.score.toFixed(2)} (${trajectoryApproved}/${trajectory.criteria.length} critérios)` +
+        ` — INFORMATIVO: ${trajectory.passed ? 'OK' : 'ATENÇÃO'}`,
+    );
+    for (const criterion of trajectory.criteria) {
+      out(`    [${criterion.passed ? 'OK' : 'FALHOU'}] ${criterion.name} — ${criterion.details}`);
+    }
+    out(
+      `  Métricas: ${trajectory.metrics.total_calls} chamadas · ` +
+        `${trajectory.metrics.unique_call_signatures} únicas · ` +
+        `${trajectory.metrics.duplicate_calls} duplicadas · ` +
+        `${trajectory.metrics.failed_calls} falhas · ` +
+        `${trajectory.metrics.total_duration_ms.toFixed(2)}ms`,
+    );
   }
 }
 
