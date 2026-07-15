@@ -6,6 +6,7 @@ import {
   errorSummarySchema,
   evalCaseResultSchema,
   evalCaseSchema,
+  expectedTrajectorySchema,
   findingSpecSchema,
   getDeploymentEventsInputSchema,
   getErrorSummaryInputSchema,
@@ -24,6 +25,8 @@ import {
   searchRunbooksInputSchema,
   searchTechSpecsInputSchema,
   toolCallRecordSchema,
+  trajectoryEvalResultSchema,
+  trajectoryMetricsSchema,
   topExceptionsResultSchema,
 } from './index.js';
 import type { ToolErrorCode } from './index.js';
@@ -530,6 +533,60 @@ describe('contratos de relatório, auditoria e eval', () => {
     if (result.success) {
       expect(result.data).toEqual(evalCase);
     }
+  });
+});
+
+describe('schemas de trajectory eval (V2.6)', () => {
+  const required = { id: 'errors', tool: 'get_error_summary', params: { service: 'checkout-api' } };
+
+  it('preserva caso legado e aplica defaults somente quando o bloco existe', () => {
+    const legacy = evalCaseSchema.parse({ id: 'legacy', question: 'q', expected_findings: [], must_not_include: [] });
+    expect(legacy.expected_trajectory).toBeUndefined();
+
+    const trajectory = expectedTrajectorySchema.parse({});
+    expect(trajectory).toEqual({ required_calls: [], order_constraints: [], forbid_exact_duplicates: true });
+  });
+
+  it.each([
+    'get_error_summary', 'get_top_exceptions', 'get_recent_logs', 'get_latency_summary',
+    'get_deployment_events', 'search_runbooks', 'get_runbook', 'search_adrs', 'search_tech_specs',
+  ])('aceita a tool conhecida %s', (tool) => {
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ id: tool, tool }] }).success).toBe(true);
+  });
+
+  it('aplica defaults de chamada e rejeita tool, ids e limites inválidos', () => {
+    const parsed = expectedTrajectorySchema.parse({ required_calls: [required] });
+    expect(parsed.required_calls[0]).toMatchObject({ params: { service: 'checkout-api' }, min_occurrences: 1 });
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ id: 'x', tool: 'unknown' }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ id: '', tool: 'get_error_summary' }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [required, required] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ ...required, min_occurrences: 2, max_occurrences: 1 }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ ...required, min_occurrences: -1 }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ ...required, min_occurrences: 1.5 }] }).success).toBe(false);
+  });
+
+  it('valida referências de ordem, autorreferência e max_calls', () => {
+    const another = { id: 'logs', tool: 'get_recent_logs' };
+    expect(expectedTrajectorySchema.safeParse({
+      required_calls: [required, another], order_constraints: [{ before: 'errors', after: 'logs' }], max_calls: 2,
+    }).success).toBe(true);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [required], order_constraints: [{ before: 'missing', after: 'errors' }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [required], order_constraints: [{ before: 'errors', after: 'missing' }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [required], order_constraints: [{ before: 'errors', after: 'errors' }] }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ max_calls: -1 }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ max_calls: 1.5 }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ max_calls: '1' }).success).toBe(false);
+    expect(expectedTrajectorySchema.safeParse({ required_calls: [{ ...required, min_occurrences: 2 }], max_calls: 1 }).success).toBe(false);
+  });
+
+  it('valida contratos de resultado e métricas nos limites', () => {
+    const metrics = { total_calls: 0, unique_call_signatures: 0, duplicate_calls: 0, failed_calls: 0, total_duration_ms: 0 };
+    expect(trajectoryMetricsSchema.safeParse(metrics).success).toBe(true);
+    expect(trajectoryMetricsSchema.safeParse({ ...metrics, failed_calls: -1 }).success).toBe(false);
+    expect(trajectoryMetricsSchema.safeParse({ ...metrics, total_duration_ms: -0.1 }).success).toBe(false);
+    expect(trajectoryEvalResultSchema.safeParse({ criteria: [], score: 0, passed: false, metrics }).success).toBe(true);
+    expect(trajectoryEvalResultSchema.safeParse({ criteria: [], score: 1, passed: true, metrics }).success).toBe(true);
+    expect(trajectoryEvalResultSchema.safeParse({ criteria: [], score: 1.01, passed: true, metrics }).success).toBe(false);
   });
 });
 
