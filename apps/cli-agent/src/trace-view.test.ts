@@ -250,4 +250,9 @@ describe('renderRecord (smoke test)', () => {
 
     expect(output).toContain('resumo do incidente');
   });
+
+  it('aceita e rotula registros source=compare', () => {
+    const output = renderRecord(record({ source: 'compare', provider: 'openrouter' }), false);
+    expect(output).toContain('compare · case-001-database-timeout');
+  });
 });

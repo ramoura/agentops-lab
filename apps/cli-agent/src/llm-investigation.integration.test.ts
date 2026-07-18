@@ -17,6 +17,8 @@ const WINDOW = { from: '2026-07-08T10:00:00-03:00', to: '2026-07-08T10:30:00-03:
 const MARKDOWN = '## Resumo executivo\nPico de 5xx no checkout-api correlacionado ao deploy 2026.07.08-1.';
 
 const CONFIG: LlmEngineConfig = {
+  provider: 'anthropic',
+  baseUrl: null,
   apiKey: 'sk-ant-fake-integracao',
   model: 'claude-sonnet-5',
   maxTokens: 4096,

@@ -96,6 +96,32 @@ describe('buildTraceRecord', () => {
 
     expect(investigationTraceRecordSchema.safeParse(record).success).toBe(true);
   });
+
+  it('UT-041: propaga provider no registro de trace', () => {
+    const record = buildTraceRecord({ ...baseInput({ kind: 'markdown', markdown: 'texto', audit: [] }), provider: 'openrouter' });
+    expect(record.provider).toBe('openrouter');
+    expect(investigationTraceRecordSchema.parse(record).provider).toBe('openrouter');
+  });
+
+  it('UT-042: trace do motor determinístico grava provider null', () => {
+    const record = buildTraceRecord({
+      ...baseInput({ kind: 'report', report: {
+        context: { question: 'q', service: 'checkout-api', window: WINDOW, symptom: null },
+        summary: 'resumo', evidences: [], primaryHypothesis: null, alternativeHypotheses: [], safeNextSteps: [],
+        missingData: [], confidence: 'baixa', audit: [],
+      } }),
+      engine: 'deterministic', model: null,
+    });
+    expect(record.provider).toBeNull();
+    expect(investigationTraceRecordSchema.parse(record).provider).toBeNull();
+  });
+
+  it('UT-043: aceita source compare e registro legado sem provider', () => {
+    const { provider: _provider, ...legacy } = buildTraceRecord(baseInput({ kind: 'markdown', markdown: 'texto', audit: [] }));
+    const compare = { ...legacy, source: 'compare' as const, provider: 'openrouter' as const };
+    expect(investigationTraceRecordSchema.safeParse(legacy).success).toBe(true);
+    expect(investigationTraceRecordSchema.safeParse(compare).success).toBe(true);
+  });
 });
 
 describe('appendTraceRecord', () => {

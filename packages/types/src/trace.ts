@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { engineKindSchema } from './common.js';
+import { engineKindSchema, llmProviderSchema } from './common.js';
 import { toolCallRecordSchema } from './audit.js';
 import { evalCaseResultSchema } from './eval.js';
 import { investigationReportSchema, missingFieldSchema } from './report.js';
@@ -47,11 +47,12 @@ export const investigationTraceRecordSchema = z.object({
   traceId: z.string().min(1), // 1 por investigação (timestamp + sufixo curto)
   runId: z.string().min(1), // agrupa os N traces de uma mesma invocação de eval; == traceId em investigate avulso
   timestamp: z.string().datetime({ offset: true }),
-  source: z.enum(['investigate', 'eval']),
+  source: z.enum(['investigate', 'eval', 'compare']),
   caseId: z.string().min(1).nullable(), // id do caso (evals/cases/*.json); null fora do eval
   question: z.string().min(1),
   engine: engineKindSchema,
   model: z.string().nullable(), // AGENTOPS_LLM_MODEL resolvido; null no motor deterministic
+  provider: llmProviderSchema.nullable().optional(), // null no deterministic; ausente em traces legados
   outcome: outcomeTraceSchema, // InvestigationOutcome inteiro — report OU markdown+audit OU clarification
   audit: z.array(toolCallRecordSchema), // trilha de auditoria (RF7), extraída do outcome para consulta direta
   rounds: z.array(roundTraceSchema).nullable(), // só motor llm; null no deterministic

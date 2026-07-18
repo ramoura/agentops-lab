@@ -11,16 +11,16 @@ import type {
   ToolName,
 } from '@agentops/types';
 import type {
-  AnthropicChatPort,
   AssistantContentBlock,
   CacheControl,
   ChatMessage,
+  ChatPort,
   SystemBlock,
   UserContentBlock,
-} from './anthropic-chat.js';
+} from './chat-port.js';
 import { LlmEngineError } from './engine-config.js';
 import type { LlmEngineConfig } from './engine-config.js';
-import { mapMcpToolsToAnthropic } from './tool-mapping.js';
+import { mapMcpToolsToChatTools } from './tool-mapping.js';
 
 /**
  * Agregado de tokens/rodadas de uma investigação (linha de custo em stderr).
@@ -57,7 +57,7 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
   private trace: RoundTrace[] = [];
 
   constructor(
-    private readonly chat: AnthropicChatPort,
+    private readonly chat: ChatPort,
     private readonly toolSource: () => Promise<McpToolDefinition[]>,
     private readonly config: LlmEngineConfig,
     private readonly systemPrompt: string,
@@ -73,7 +73,7 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
   }
 
   async investigate(question: string, tools: ToolInvoker): Promise<InvestigationOutcome> {
-    const anthropicTools = mapMcpToolsToAnthropic(await this.toolSource());
+    const chatTools = mapMcpToolsToChatTools(await this.toolSource());
     const auditLog = new InMemoryAuditLog();
     const auditedTools = auditLog.wrap(tools);
     const usage: LlmUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, rounds: 0 };
@@ -105,7 +105,7 @@ export class LlmInvestigationAssistant implements InvestigationAssistant {
           model: this.config.model,
           max_tokens: this.config.maxTokens,
           system,
-          tools: anthropicTools,
+          tools: chatTools,
           tool_choice: { type: 'auto' },
           messages: cacheEnabled ? withMobileBreakpoint(messages) : messages,
         });

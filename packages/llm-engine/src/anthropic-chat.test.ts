@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type Anthropic from '@anthropic-ai/sdk';
 import { AnthropicChatAdapter } from './anthropic-chat.js';
-import type { ChatRequest, MessagesApi } from './anthropic-chat.js';
+import type { MessagesApi } from './anthropic-chat.js';
+import type { ChatRequest } from './chat-port.js';
 
 /**
  * Testes do adapter do SDK com um `MessagesApi` fake injetado — nenhuma

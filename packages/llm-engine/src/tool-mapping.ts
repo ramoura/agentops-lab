@@ -1,21 +1,15 @@
 import { TOOL_NAMES } from '@agentops/types';
-import type { McpToolDefinition, ToolName } from '@agentops/types';
+import type { McpToolDefinition } from '@agentops/types';
 import { LlmEngineError } from './engine-config.js';
+import type { ChatToolDefinition } from './chat-port.js';
 
 /**
  * Mapeamento das definições MCP (`client.listTools()`) para o formato de tool
- * da Messages API da Anthropic. MCP e Anthropic usam JSON Schema no mesmo
+ * da porta de chat. MCP e os providers usam JSON Schema no mesmo
  * formato — o mapeamento é passthrough; o motor NÃO duplica contratos (as
  * descrições ricas vêm do server em runtime, princípio da skill
  * desenvolver-mcp-tools: o agente escolhe a tool pela descrição).
  */
-
-/** Tool definition da Messages API (`tools[]` de `messages.create`). */
-export interface AnthropicToolDefinition {
-  name: ToolName;
-  description: string;
-  input_schema: Record<string, unknown>;
-}
 
 /**
  * Valida e mapeia as definições descobertas via MCP:
@@ -26,7 +20,7 @@ export interface AnthropicToolDefinition {
  *   garantia read-only — RF10);
  * - `inputSchema` → `input_schema` por referência (passthrough).
  */
-export function mapMcpToolsToAnthropic(definitions: McpToolDefinition[]): AnthropicToolDefinition[] {
+export function mapMcpToolsToChatTools(definitions: McpToolDefinition[]): ChatToolDefinition[] {
   for (const definition of definitions) {
     if (!(TOOL_NAMES as readonly string[]).includes(definition.name)) {
       throw new LlmEngineError(

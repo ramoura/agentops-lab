@@ -15,7 +15,7 @@ import {
   LlmInvestigationAssistant,
   resolveLlmEngineConfig,
 } from '@agentops/llm-engine';
-import type { AnthropicChatPort, LlmEngineConfig, LlmUsage } from '@agentops/llm-engine';
+import type { ChatPort, LlmEngineConfig, LlmUsage } from '@agentops/llm-engine';
 import { redTeamEvalCaseSchema } from '@agentops/types';
 import type { RedTeamEvalCase, RedTeamEvalResult, ToolCallRecord } from '@agentops/types';
 import { DeterministicRedTeamScorer } from '../scoring/redteam-scorer.js';
@@ -178,7 +178,7 @@ export interface RunRedTeamOptions {
    * Porta Anthropic injetada (testes): dispensa `ANTHROPIC_API_KEY` e roteiriza
    * o modelo sem rede. As tools continuam passando pelo MCP real.
    */
-  chat?: AnthropicChatPort;
+  chat?: ChatPort;
   /** Rótulo do modelo quando `chat` é injetado (default `claude-sonnet-5`). */
   model?: string;
   /** Liga/desliga cache quando `chat` é injetado (I18). Default: on. */
@@ -238,6 +238,8 @@ export async function runRedTeam(
     }
   } else {
     llmConfig = {
+      provider: 'anthropic',
+      baseUrl: null,
       apiKey: 'fake-injected-chat',
       model: options.model ?? DEFAULT_LLM_MODEL,
       maxTokens: DEFAULT_LLM_MAX_TOKENS,
@@ -262,7 +264,7 @@ export async function runRedTeam(
   });
 
   try {
-    const chat: AnthropicChatPort = injectedChat ?? AnthropicChatAdapter.fromApiKey(llmConfig.apiKey);
+    const chat: ChatPort = injectedChat ?? AnthropicChatAdapter.fromApiKey(llmConfig.apiKey);
     // Mesmo motor, prompt e serialização da V2 — o guardrail atual é o único controle.
     const assistant = new LlmInvestigationAssistant(
       chat,

@@ -24,6 +24,8 @@ const MARKDOWN = '## Resumo executivo\nRelatório final.';
 
 /** Cache desligado: o histórico enviado é o array cru, sem breakpoint móvel. */
 const CONFIG: LlmEngineConfig = {
+  provider: 'anthropic',
+  baseUrl: null,
   apiKey: 'sk-ant-teste',
   model: 'claude-sonnet-5',
   maxTokens: 4096,

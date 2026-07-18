@@ -1,82 +1,18 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { AnthropicToolDefinition } from './tool-mapping.js';
+import type {
+  AssistantContentBlock,
+  ChatPort,
+  ChatRequest,
+  ChatResponse,
+} from './chat-port.js';
 
 /**
  * Porta fina sobre `client.messages.create()` do `@anthropic-ai/sdk` — único
  * ponto de contato do lab com o SDK da Anthropic (mesmo padrão de isolamento
- * do `mcp-tool-invoker.ts`): o loop agêntico enxerga apenas `AnthropicChatPort`
+ * do `mcp-tool-invoker.ts`): o loop agêntico enxerga apenas `ChatPort`
  * e os tipos `ChatRequest`/`ChatResponse`, substituíveis por fake nos testes
  * (nenhum teste da suíte default toca rede ou gasta tokens).
  */
-
-/**
- * Breakpoint de prompt caching da Messages API (`cache_control`, TTL de 5
- * minutos). Metadado do bloco — o texto do prompt não muda um byte com o
- * marker presente ou ausente.
- */
-export interface CacheControl {
-  type: 'ephemeral';
-}
-
-/** Bloco de system com breakpoint opcional (`system` é sempre `SystemBlock[]`). */
-export interface SystemBlock {
-  type: 'text';
-  text: string;
-  cache_control?: CacheControl;
-}
-
-/** Bloco de conteúdo produzido pelo modelo (assistant). */
-export type AssistantContentBlock =
-  | { type: 'text'; text: string; cache_control?: CacheControl }
-  | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; cache_control?: CacheControl };
-
-/** Bloco de conteúdo enviado pelo usuário (pergunta crua ou tool_result). */
-export type UserContentBlock =
-  | { type: 'text'; text: string; cache_control?: CacheControl }
-  | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; cache_control?: CacheControl };
-
-export type ChatMessage =
-  | { role: 'user'; content: UserContentBlock[] }
-  | { role: 'assistant'; content: AssistantContentBlock[] };
-
-/**
- * Espelho tipado dos parâmetros de `messages.create()` usados pelo motor.
- * Sem `temperature`/`top_p`/`top_k`: os parâmetros de sampling foram removidos
- * da API nos modelos atuais (claude-sonnet-5+) e retornam 400 se enviados.
- */
-export interface ChatRequest {
-  model: string;
-  max_tokens: number;
-  system: SystemBlock[];
-  tools: AnthropicToolDefinition[];
-  tool_choice: { type: 'auto' };
-  messages: ChatMessage[];
-}
-
-/**
- * Uso de tokens de uma rodada (campo `usage` da resposta). Os campos de cache
- * chegam sempre preenchidos (ausentes no upstream → `0`, nunca `undefined`);
- * a entrada total da rodada é
- * `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`.
- */
-export interface ChatUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_creation_input_tokens: number;
-  cache_read_input_tokens: number;
-}
-
-/** Espelho tipado da resposta de `messages.create()` usada pelo motor. */
-export interface ChatResponse {
-  content: AssistantContentBlock[];
-  stop_reason: 'end_turn' | 'tool_use' | 'max_tokens' | (string & {}) | null;
-  usage: ChatUsage;
-}
-
-/** Única superfície do @anthropic-ai/sdk — substituível por fake nos testes. */
-export interface AnthropicChatPort {
-  create(request: ChatRequest): Promise<ChatResponse>;
-}
 
 /** Fatia do SDK consumida pelo adapter (injetável nos testes do adapter). */
 export interface MessagesApi {
@@ -89,7 +25,7 @@ export interface MessagesApi {
  * converte em `LlmEngineError('api_error')`. A API key vive apenas dentro do
  * client — nunca em logs ou mensagens de erro.
  */
-export class AnthropicChatAdapter implements AnthropicChatPort {
+export class AnthropicChatAdapter implements ChatPort {
   constructor(private readonly messages: MessagesApi) {}
 
   static fromApiKey(apiKey: string): AnthropicChatAdapter {

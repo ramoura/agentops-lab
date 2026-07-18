@@ -21,6 +21,7 @@ import type {
   EvalCaseResult,
   InvestigationAssistant,
   InvestigationOutcome,
+  LlmProvider,
   RoundTrace,
   ToolCallRecord,
   TrajectoryEvalResult,
@@ -101,7 +102,7 @@ export async function loadCases(casesDir: string = DEFAULT_CASES_DIR): Promise<E
 function buildAssistant(
   engine: EngineKind,
   invoker: () => McpToolInvoker,
-): { assistant: InvestigationAssistant; model: string | null } {
+): { assistant: InvestigationAssistant; model: string | null; provider: LlmProvider | null } {
   if (engine === 'llm') {
     const config = resolveLlmEngineConfig(process.env);
     const assistant = new LlmInvestigationAssistant(
@@ -110,9 +111,9 @@ function buildAssistant(
       config,
       buildSystemPrompt(),
     );
-    return { assistant, model: config.model };
+    return { assistant, model: config.model, provider: config.provider };
   }
-  return { assistant: new DeterministicInvestigationAssistant(), model: null };
+  return { assistant: new DeterministicInvestigationAssistant(), model: null, provider: null };
 }
 
 /** Executa todos os casos e imprime score por caso + resumo agregado (RF23/RF27). */
@@ -131,11 +132,13 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
   // Validação do modo llm (API key, skill) antes de spawnar o server.
   let invoker: McpToolInvoker;
   let model: string | null = null;
+  let provider: LlmProvider | null = null;
   const assistant =
     options.assistant ??
     (() => {
       const built = buildAssistant(engine, () => invoker);
       model = built.model;
+      provider = built.provider;
       return built.assistant;
     })();
 
@@ -196,6 +199,7 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
             question: evalCase.question,
             engine,
             model,
+            provider,
             outcome,
             rounds: readLastTrace(assistant),
             usage: readLastUsage(assistant),

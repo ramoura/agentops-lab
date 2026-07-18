@@ -6,6 +6,7 @@ import type {
   EvalCaseResult,
   InvestigationOutcome,
   InvestigationTraceRecord,
+  LlmProvider,
   RoundTrace,
   ToolCallRecord,
 } from '@agentops/types';
@@ -25,12 +26,13 @@ export function generateRunId(): string {
 }
 
 export interface BuildTraceRecordInput {
-  source: 'investigate' | 'eval';
+  source: 'investigate' | 'eval' | 'compare';
   runId: string;
   caseId: string | null;
   question: string;
   engine: EngineKind;
   model: string | null;
+  provider?: LlmProvider | null;
   outcome: InvestigationOutcome;
   rounds: RoundTrace[] | null;
   usage: LlmUsage | null;
@@ -59,6 +61,7 @@ export function buildTraceRecord(input: BuildTraceRecordInput): InvestigationTra
     question: input.question,
     engine: input.engine,
     model: input.model,
+    provider: input.provider ?? null,
     outcome: input.outcome,
     audit: extractAudit(input.outcome),
     rounds: input.rounds,

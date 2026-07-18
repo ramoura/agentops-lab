@@ -1,4 +1,5 @@
-import type { ToolCallRecord } from '@agentops/types';
+import { llmProviderSchema } from '@agentops/types';
+import type { LlmProvider, ToolCallRecord } from '@agentops/types';
 
 /**
  * Resolução de configuração do motor LLM por variáveis de ambiente e o
@@ -51,6 +52,8 @@ export class LlmEngineError extends Error {
  * retorna 400 `invalid_request_error`.
  */
 export interface LlmEngineConfig {
+  provider: LlmProvider;
+  baseUrl: string | null;
   apiKey: string;
   model: string;
   maxTokens: number;
@@ -62,33 +65,83 @@ export const DEFAULT_LLM_MODEL = 'claude-sonnet-5';
 export const DEFAULT_LLM_MAX_TOKENS = 4096;
 export const DEFAULT_LLM_MAX_ROUNDS = 16;
 export const DEFAULT_LLM_CACHE_ENABLED = true;
+export const DEFAULT_LLM_BASE_URLS: Record<LlmProvider, string | null> = {
+  anthropic: null,
+  openrouter: 'https://openrouter.ai/api/v1',
+  openai: null,
+};
+
+const API_KEY_ENV_BY_PROVIDER: Record<LlmProvider, string> = {
+  anthropic: 'ANTHROPIC_API_KEY',
+  openrouter: 'OPENROUTER_API_KEY',
+  openai: 'OPENAI_API_KEY',
+};
+
+export interface LlmEngineConfigOverrides {
+  provider?: LlmProvider;
+  model?: string;
+}
 
 /**
- * Resolve a config de `ANTHROPIC_API_KEY`, `AGENTOPS_LLM_MODEL`,
+ * Resolve a config do provider selecionado, `AGENTOPS_LLM_MODEL`,
  * `AGENTOPS_LLM_MAX_TOKENS`, `AGENTOPS_LLM_MAX_ROUNDS` e
  * `AGENTOPS_LLM_CACHE`, aplicando defaults e validando antes de tocar rede.
  * Campos ausentes viram defaults explícitos — nunca `undefined` silencioso.
  */
-export function resolveLlmEngineConfig(env: NodeJS.ProcessEnv = process.env): LlmEngineConfig {
-  const apiKey = env['ANTHROPIC_API_KEY'];
-  if (apiKey === undefined || apiKey.trim() === '') {
+export function resolveLlmEngineConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  overrides: LlmEngineConfigOverrides = {},
+): LlmEngineConfig {
+  const provider = resolveProvider(overrides.provider ?? env['AGENTOPS_LLM_PROVIDER']);
+  const rawModel = overrides.model ?? env['AGENTOPS_LLM_MODEL'];
+  const model = rawModel?.trim() || (provider === 'anthropic' ? DEFAULT_LLM_MODEL : null);
+  if (model === null) {
     throw new LlmEngineError(
-      'missing_api_key',
-      'O modo --engine=llm requer a variável ANTHROPIC_API_KEY. ' +
-        'Exporte a chave (export ANTHROPIC_API_KEY=...) ou use o motor default (determinístico), ' +
-        'que não precisa de chave: npm run investigate -- "<pergunta>"',
+      'invalid_config',
+      'AGENTOPS_LLM_MODEL é obrigatório para providers diferentes de anthropic; ' +
+        'não há default de modelo fora do Anthropic. Defina a variável ou informe um override de model.',
     );
   }
 
-  const model = env['AGENTOPS_LLM_MODEL']?.trim() || DEFAULT_LLM_MODEL;
+  const apiKeyName = API_KEY_ENV_BY_PROVIDER[provider];
+  const apiKey = env[apiKeyName];
+  if (apiKey === undefined || apiKey.trim() === '') {
+    throw new LlmEngineError(
+      'missing_api_key',
+      provider === 'anthropic'
+        ? 'O modo --engine=llm requer a variável ANTHROPIC_API_KEY. ' +
+          'Exporte a chave (export ANTHROPIC_API_KEY=...) ou use o motor default (determinístico), ' +
+          'que não precisa de chave: npm run investigate -- "<pergunta>"'
+        : `O modo --engine=llm com provider ${provider} requer a variável ${apiKeyName}. ` +
+          `Exporte a chave (export ${apiKeyName}=...) ou use o motor default (determinístico), ` +
+          'que não precisa de chave: npm run investigate -- "<pergunta>"',
+    );
+  }
+
+  const configuredBaseUrl = env['AGENTOPS_LLM_BASE_URL']?.trim();
 
   return {
+    provider,
+    baseUrl: configuredBaseUrl === undefined || configuredBaseUrl === '' ? DEFAULT_LLM_BASE_URLS[provider] : configuredBaseUrl,
     apiKey,
     model,
-    maxTokens: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_TOKENS', DEFAULT_LLM_MAX_TOKENS),
-    maxRounds: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_ROUNDS', DEFAULT_LLM_MAX_ROUNDS),
-    cacheEnabled: resolveCacheEnabled(env),
+    maxTokens: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_TOKENS', DEFAULT_LLM_MAX_TOKENS, apiKey),
+    maxRounds: resolvePositiveInt(env, 'AGENTOPS_LLM_MAX_ROUNDS', DEFAULT_LLM_MAX_ROUNDS, apiKey),
+    cacheEnabled: resolveCacheEnabled(env, apiKey),
   };
+}
+
+function resolveProvider(raw: string | undefined): LlmProvider {
+  const value = raw?.trim() || 'anthropic';
+  const result = llmProviderSchema.safeParse(value);
+  if (!result.success) {
+    throw new LlmEngineError(
+      'invalid_config',
+      `AGENTOPS_LLM_PROVIDER deve ser um dos valores aceitos: anthropic|openrouter|openai. ` +
+        'Remova a variável para usar o default (anthropic).',
+    );
+  }
+  return result.data;
 }
 
 /**
@@ -96,7 +149,7 @@ export function resolveLlmEngineConfig(env: NodeJS.ProcessEnv = process.env): Ll
  * `on|true|1` → ligado; `off|false|0` → desligado (case-insensitive);
  * qualquer outro valor → erro orientativo.
  */
-function resolveCacheEnabled(env: NodeJS.ProcessEnv): boolean {
+function resolveCacheEnabled(env: NodeJS.ProcessEnv, secret: string): boolean {
   const raw = env['AGENTOPS_LLM_CACHE'];
   if (raw === undefined || raw.trim() === '') {
     return DEFAULT_LLM_CACHE_ENABLED;
@@ -110,13 +163,13 @@ function resolveCacheEnabled(env: NodeJS.ProcessEnv): boolean {
   }
   throw new LlmEngineError(
     'invalid_config',
-    `AGENTOPS_LLM_CACHE aceita on|true|1 (liga) ou off|false|0 (desliga) — recebido: "${raw}". ` +
+    `AGENTOPS_LLM_CACHE aceita on|true|1 (liga) ou off|false|0 (desliga) — recebido: "${redact(raw, secret)}". ` +
       'Remova a variável para usar o default (on, prompt caching ligado).',
   );
 }
 
 /** Inteiro > 0 de uma env, com default; valor inválido → erro orientativo. */
-function resolvePositiveInt(env: NodeJS.ProcessEnv, name: string, defaultValue: number): number {
+function resolvePositiveInt(env: NodeJS.ProcessEnv, name: string, defaultValue: number, secret: string): number {
   const raw = env[name];
   if (raw === undefined || raw.trim() === '') {
     return defaultValue;
@@ -125,9 +178,13 @@ function resolvePositiveInt(env: NodeJS.ProcessEnv, name: string, defaultValue: 
   if (!Number.isInteger(value) || value <= 0) {
     throw new LlmEngineError(
       'invalid_config',
-      `${name} deve ser um número inteiro maior que zero (recebido: "${raw}"). ` +
+      `${name} deve ser um número inteiro maior que zero (recebido: "${redact(raw, secret)}"). ` +
         `Remova a variável para usar o default (${defaultValue}).`,
     );
   }
   return value;
+}
+
+function redact(value: string, secret: string): string {
+  return value === secret ? '<redacted>' : value;
 }

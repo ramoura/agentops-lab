@@ -54,6 +54,10 @@ export const ENGINE_KINDS = ['deterministic', 'llm'] as const;
 export type EngineKind = (typeof ENGINE_KINDS)[number];
 export const engineKindSchema = z.enum(ENGINE_KINDS);
 
+/** Providers LLM suportados pela V2.4; o endpoint custom usa o dialeto OpenAI. */
+export const llmProviderSchema = z.enum(['anthropic', 'openrouter', 'openai']);
+export type LlmProvider = z.infer<typeof llmProviderSchema>;
+
 /**
  * Definição de tool descoberta via `client.listTools()` do MCP (nome +
  * descrição + JSON Schema). Mapeada de forma passthrough para o formato de
