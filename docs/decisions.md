@@ -93,3 +93,10 @@ Registro exigido pelo `AGENTS.md` (§4 e §12). Formato: contexto → decisão �
 - **Contexto**: outcomes iguais podem vir de trajetórias com custos e qualidade operacional diferentes; o audit RF7 já registra `seq`, tool, params, resultado e duração nos dois motores.
 - **Decisão**: avaliar `ToolCallRecord[]` com scorer local separado do outcome. Casos declaram chamadas essenciais, limites e poucas precedências parciais; matching usa subconjunto recursivo, duplicatas usam tool + parâmetros integralmente canonicalizados e duração é somente métrica. O resultado começa estritamente informativo e nunca altera score, aprovação ou exit code do outcome.
 - **Consequências**: regressões de baseline, redundância e volume ficam visíveis sem impor trajetória dourada. Casos sem `expected_trajectory` continuam sem migração; promoção futura a gate deverá ocorrer critério a critério após evidência de estabilidade.
+
+## D16 — Modelo-alvo do smoke real da V2.4
+
+- **Contexto**: o PRD deixou em aberto qual modelo deveria fornecer o baseline empírico do provider OpenRouter. O smoke precisa exercitar o caminho real com custo opt-in baixo, sem tornar a suíte default ou a CI dependente de credencial.
+- **Decisão**: fixar `deepseek/deepseek-chat` via OpenRouter como o modelo-alvo do smoke E2E-004. A seleção é feita por `AGENTOPS_LLM_PROVIDER=openrouter`, `AGENTOPS_LLM_MODEL=deepseek/deepseek-chat` e `OPENROUTER_API_KEY`.
+- **Consequências**: a validação real fica reproduzível no onboarding e comparável com outras linhas da bancada, enquanto a ausência da chave mantém o teste skipped e o caminho default sem rede ou tokens. O resultado continua sendo evidência de uma execução, não garantia estatística.
+- **Privacidade e custo**: a pergunta e os resultados fake das tools passam por um terceiro (OpenRouter), aceitável no lab; antes da V3, com dados reais, retenção e políticas precisam ser reavaliadas. O smoke e a bancada medem tokens/cache/rodadas, sem converter para US$.
