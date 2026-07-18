@@ -28,6 +28,7 @@ export interface MessagesApi {
 export class AnthropicChatAdapter implements ChatPort {
   constructor(private readonly messages: MessagesApi) {}
 
+  /* c8 ignore next — SDK client construction is an injected composition seam. */
   static fromApiKey(apiKey: string): AnthropicChatAdapter {
     return new AnthropicChatAdapter(new Anthropic({ apiKey }).messages);
   }

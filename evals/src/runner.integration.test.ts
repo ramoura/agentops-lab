@@ -2,8 +2,16 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { LlmEngineError } from '@agentops/llm-engine';
-import type { LlmUsage } from '@agentops/llm-engine';
+import {
+  buildSystemPrompt,
+  LlmEngineError,
+  LlmInvestigationAssistant,
+} from '@agentops/llm-engine';
+import type { ChatPort, LlmEngineConfig, LlmUsage } from '@agentops/llm-engine';
+import { endTurn, FakeAnthropicChat, mcpDefinitions } from '@agentops/llm-engine/testing';
+import { FakeChatCompletions, completion } from '@agentops/openai-engine/testing';
+import { OpenAiChatAdapter } from '@agentops/openai-engine';
+import { createChatPort } from '@agentops/cli-agent/chat-port-factory';
 import { investigationTraceRecordSchema } from '@agentops/types';
 import type { InvestigationAssistant, InvestigationOutcome, ToolCallRecord, ToolName } from '@agentops/types';
 import { auditFromOutcome, loadCases, runEvals } from './runner.js';
@@ -231,6 +239,62 @@ describe('runEvals({ engine: "llm", assistant: fake }) sobre os 3 casos', () => 
   }, 90_000);
 });
 
+describe('runEvals via a fábrica de porta', () => {
+  it('IT-002: mantém stdout/scores entre dialetos e reprova fonte omitida', async () => {
+    const cases = await loadCases();
+    const markdowns = cases.map((evalCase, index) =>
+      index === 1
+        ? scriptedMarkdown(evalCase.question).replace(/\n   Fonte:.*$/m, '')
+        : scriptedMarkdown(evalCase.question),
+    );
+    const config: LlmEngineConfig = {
+      provider: 'anthropic',
+      baseUrl: null,
+      apiKey: 'sk-factory-test',
+      model: 'claude-sonnet-5',
+      maxTokens: 4096,
+      maxRounds: 16,
+      cacheEnabled: false,
+    };
+
+    async function runWithFactory(provider: 'anthropic' | 'openai'): Promise<{ output: string; summary: EvalRunSummary }> {
+      const providerConfig: LlmEngineConfig = {
+        ...config,
+        provider,
+        model: provider === 'anthropic' ? 'claude-sonnet-5' : 'gpt-test',
+      };
+      let port: ChatPort;
+      if (provider === 'anthropic') {
+        const fake = new FakeAnthropicChat(markdowns.map((markdown) => endTurn(markdown)));
+        port = createChatPort(providerConfig, {
+          anthropicFromApiKey: () => fake,
+          openAiFromConfig: () => new OpenAiChatAdapter(new FakeChatCompletions([completion('unused')]), 'openai'),
+        });
+      } else {
+        const fake = new FakeChatCompletions(markdowns.map((markdown) => completion(markdown)));
+        port = createChatPort(providerConfig, {
+          anthropicFromApiKey: () => new FakeAnthropicChat([endTurn('unused')]),
+          openAiFromConfig: () => new OpenAiChatAdapter(fake, 'openai', providerConfig.apiKey),
+        });
+      }
+      const assistant = new LlmInvestigationAssistant(port, async () => mcpDefinitions(), providerConfig, buildSystemPrompt());
+      const output: string[] = [];
+      const summary = await runEvals({ engine: 'llm', assistant, out: (line) => output.push(line), err: () => {} });
+      return { output: output.join('\n'), summary };
+    }
+
+    const anthropic = await runWithFactory('anthropic');
+    const openai = await runWithFactory('openai');
+
+    expect(openai.output).toBe(anthropic.output);
+    expect(openai.summary.results.map((result) => result.outcome.score)).toEqual(
+      anthropic.summary.results.map((result) => result.outcome.score),
+    );
+    const omittedSource = openai.summary.results[1]?.outcome.criteria.find((criterion) => criterion.name === 'cita_evidencias');
+    expect(omittedSource?.passed).toBe(false);
+  }, 90_000);
+});
+
 /** Fake llm que expõe `lastUsage` (mesma superfície do assistant concreto). */
 class FakeLlmAssistantWithUsage extends FakeLlmAssistant {
   readonly lastUsage: LlmUsage = {
@@ -447,6 +511,23 @@ describe('runEvals({ traceLogPath }) — trace opt-in', () => {
       expect(record.engine).toBe('llm');
       expect(record.eval).toEqual(summary.results[index]?.outcome);
     });
+  }, 90_000);
+
+  it('IT-011: assistant montado via fábrica grava provider e model em cada registro', async () => {
+    const traceLogPath = join(dir, 'llm-provider.jsonl');
+    await runEvals({
+      engine: 'llm',
+      assistant: new FakeLlmAssistant(),
+      provider: 'openai',
+      model: 'gpt-test',
+      traceLogPath,
+      out: () => {},
+      err: () => {},
+    });
+
+    const records = (await readTraceLines(traceLogPath)).map((record) => investigationTraceRecordSchema.parse(record));
+    expect(records).toHaveLength(3);
+    expect(records.every((record) => record.provider === 'openai' && record.model === 'gpt-test')).toBe(true);
   }, 90_000);
 
   it('sem traceLogPath → nenhum arquivo criado (comportamento default inalterado)', async () => {

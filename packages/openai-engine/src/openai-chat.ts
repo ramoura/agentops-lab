@@ -75,6 +75,7 @@ export class OpenAiChatAdapter implements ChatPort {
     private readonly apiKey = '',
   ) {}
 
+  /* c8 ignore next — SDK client construction is an injected composition seam. */
   static fromConfig(config: LlmEngineConfig): OpenAiChatAdapter {
     const client = new OpenAI({
       apiKey: config.apiKey,

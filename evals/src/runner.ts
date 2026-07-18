@@ -3,12 +3,12 @@ import { join, resolve } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { EngineArgError, formatTokenCount, resolveEngineArgs } from '@agentops/cli-agent/main';
+import { createChatPort } from '@agentops/cli-agent/chat-port-factory';
 import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
 import { renderReport } from '@agentops/cli-agent/renderer';
 import { appendTraceRecord, buildTraceRecord, generateRunId } from '@agentops/cli-agent/trace-log';
 import { DeterministicInvestigationAssistant } from '@agentops/core';
 import {
-  AnthropicChatAdapter,
   buildSystemPrompt,
   LlmInvestigationAssistant,
   resolveLlmEngineConfig,
@@ -68,6 +68,9 @@ export interface RunEvalsOptions {
    * No modo llm dispensa a `ANTHROPIC_API_KEY`.
    */
   assistant?: InvestigationAssistant;
+  /** Identidade do provider/modelo quando um assistant já foi montado pelo chamador. */
+  model?: string | null;
+  provider?: LlmProvider | null;
   /** Diretório dos casos (default: `evals/cases/`). */
   casesDir?: string;
   /** Destino dos resultados (default: stdout). */
@@ -106,7 +109,7 @@ function buildAssistant(
   if (engine === 'llm') {
     const config = resolveLlmEngineConfig(process.env);
     const assistant = new LlmInvestigationAssistant(
-      AnthropicChatAdapter.fromApiKey(config.apiKey),
+      createChatPort(config),
       () => invoker().listTools(),
       config,
       buildSystemPrompt(),
@@ -131,8 +134,8 @@ export async function runEvals(options: RunEvalsOptions = {}): Promise<EvalRunSu
 
   // Validação do modo llm (API key, skill) antes de spawnar o server.
   let invoker: McpToolInvoker;
-  let model: string | null = null;
-  let provider: LlmProvider | null = null;
+  let model: string | null = engine === 'llm' ? (options.model ?? null) : null;
+  let provider: LlmProvider | null = engine === 'llm' ? (options.provider ?? null) : null;
   const assistant =
     options.assistant ??
     (() => {
@@ -297,6 +300,7 @@ export function printCaseResult(result: EvalRunCaseResult, out: (line: string) =
   }
 }
 
+/* c8 ignore start — composition root is covered by the CLI E2E contract. */
 const invokedDirectly = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 function resolveCliEngine(): EngineKind | null {
@@ -328,3 +332,4 @@ if (invokedDirectly) {
     );
   }
 }
+/* c8 ignore stop */

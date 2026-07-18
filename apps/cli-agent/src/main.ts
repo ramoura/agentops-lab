@@ -3,7 +3,6 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DeterministicInvestigationAssistant } from '@agentops/core';
 import {
-  AnthropicChatAdapter,
   buildSystemPrompt,
   LlmEngineError,
   LlmInvestigationAssistant,
@@ -21,6 +20,7 @@ import type {
   ToolName,
 } from '@agentops/types';
 import { McpConnectionError, McpToolInvoker } from './mcp-tool-invoker.js';
+import { createChatPort } from './chat-port-factory.js';
 import { renderMissingFields, renderOutcome, renderUsage, shouldUseColor } from './renderer.js';
 import { appendTraceRecord, buildTraceRecord, generateRunId } from './trace-log.js';
 
@@ -235,7 +235,7 @@ async function main(): Promise<number> {
     let llmAssistant: LlmInvestigationAssistant | null = null;
     if (llm !== null) {
       llmAssistant = new LlmInvestigationAssistant(
-        AnthropicChatAdapter.fromApiKey(llm.config.apiKey),
+        createChatPort(llm.config),
         () => invoker.listTools(),
         llm.config,
         llm.systemPrompt,
