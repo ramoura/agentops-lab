@@ -3,7 +3,6 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { DeterministicInvestigationAssistant } from '@agentops/core';
 import {
-  AnthropicChatAdapter,
   buildSystemPrompt,
   LlmEngineError,
   LlmInvestigationAssistant,
@@ -16,10 +15,12 @@ import type {
   InvestigationAssistant,
   InvestigationOutcome,
   InvestigationTraceRecord,
+  LlmProvider,
   ToolInvoker,
   ToolName,
 } from '@agentops/types';
 import { McpConnectionError, McpToolInvoker } from './mcp-tool-invoker.js';
+import { createChatPort } from './chat-port-factory.js';
 import { renderMissingFields, renderOutcome, renderUsage, shouldUseColor } from './renderer.js';
 import { appendTraceRecord, buildTraceRecord, generateRunId } from './trace-log.js';
 
@@ -137,6 +138,7 @@ export interface InvestigateTraceInput {
   question: string;
   engine: EngineKind;
   model: string | null;
+  provider?: LlmProvider | null;
   llmAssistant: LlmInvestigationAssistant | null;
 }
 
@@ -149,7 +151,7 @@ export interface InvestigateTraceInput {
  * relatório que já foi impresso).
  */
 export async function writeInvestigateTrace(input: InvestigateTraceInput): Promise<void> {
-  const { tracePath, outcome, question, engine, model, llmAssistant } = input;
+  const { tracePath, outcome, question, engine, model, provider, llmAssistant } = input;
   if (tracePath === undefined || outcome.kind === 'clarification') {
     return;
   }
@@ -163,6 +165,7 @@ export async function writeInvestigateTrace(input: InvestigateTraceInput): Promi
         question,
         engine,
         model,
+        provider,
         outcome,
         rounds: llmAssistant?.lastTrace ?? null,
         usage: llmAssistant?.lastUsage ?? null,
@@ -232,7 +235,7 @@ async function main(): Promise<number> {
     let llmAssistant: LlmInvestigationAssistant | null = null;
     if (llm !== null) {
       llmAssistant = new LlmInvestigationAssistant(
-        AnthropicChatAdapter.fromApiKey(llm.config.apiKey),
+        createChatPort(llm.config),
         () => invoker.listTools(),
         llm.config,
         llm.systemPrompt,
@@ -266,6 +269,7 @@ async function main(): Promise<number> {
       question,
       engine,
       model: llm?.config.model ?? null,
+      provider: llm?.config.provider ?? null,
       llmAssistant,
     });
 

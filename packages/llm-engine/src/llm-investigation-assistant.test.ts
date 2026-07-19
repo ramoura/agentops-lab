@@ -11,7 +11,7 @@ import {
   toolUseRound,
 } from './__fixtures__/testing.js';
 import type { StubResponse } from './__fixtures__/testing.js';
-import type { AssistantContentBlock, ChatRequest, UserContentBlock } from './anthropic-chat.js';
+import type { AssistantContentBlock, ChatRequest, UserContentBlock } from './chat-port.js';
 import { LlmEngineError } from './engine-config.js';
 import type { LlmEngineConfig } from './engine-config.js';
 import { LlmInvestigationAssistant } from './llm-investigation-assistant.js';
@@ -26,6 +26,8 @@ const WINDOW = { from: '2026-07-08T10:00:00-03:00', to: '2026-07-08T10:30:00-03:
 const MARKDOWN = '## Resumo executivo\nO checkout-api apresentou pico de 5xx…';
 
 const CONFIG: LlmEngineConfig = {
+  provider: 'anthropic',
+  baseUrl: null,
   apiKey: 'sk-ant-teste',
   model: 'claude-sonnet-5',
   maxTokens: 4096,

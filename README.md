@@ -15,14 +15,14 @@ MCP/tools para acessar sistemas
 O lab tem **dois motores de investigação** selecionáveis por `--engine`:
 
 - **`deterministic`** (default, da V1): parser + pipeline determinístico, sem LLM em runtime — roda 100% offline, sem API key, com saída reproduzível (pré-requisito do eval determinístico).
-- **`llm`** (V2): loop agêntico manual sobre a **Messages API da Anthropic**, consumindo as **mesmas 9 MCP tools** — a skill vira system prompt e o modelo decide quais tools chamar. Requer `ANTHROPIC_API_KEY`.
+- **`llm`** (V2/V2.4): loop agêntico manual sobre a **Messages API da Anthropic** ou o dialeto **OpenAI-compatible**, consumindo as **mesmas 9 MCP tools** — a skill vira system prompt e o modelo decide quais tools chamar. Anthropic é o default; OpenRouter e OpenAI são providers de primeira classe; endpoints custom são best-effort.
 
 Integrações reais de observabilidade são a V3 — ver [`docs/roadmap.md`](./docs/roadmap.md).
 
 ## Requisitos
 
 - Node.js ≥ 20 (sem nenhuma infraestrutura externa: sem cloud, sem banco)
-- `ANTHROPIC_API_KEY` **apenas** para o modo `--engine=llm` — o default continua funcionando sem key e sem custo
+- Uma chave de provider **apenas** para o modo `--engine=llm` — o default determinístico continua funcionando sem configuração nova, sem rede e sem custo.
 
 ## Instalação
 
@@ -58,29 +58,72 @@ Cenários simulados disponíveis: `checkout-api` (incidente principal, 10h–10h
 ## Modo LLM (`--engine=llm`)
 
 ```bash
+# Anthropic é o caminho default byte-idêntico; basta a chave existente.
 export ANTHROPIC_API_KEY=sk-ant-...
+npm run investigate -- --engine=llm "Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08"
+
+# Providers OpenAI-compatible: provider e modelo são explícitos.
+export AGENTOPS_LLM_PROVIDER=openrouter
+export AGENTOPS_LLM_MODEL=deepseek/deepseek-chat
+export OPENROUTER_API_KEY=...
 npm run investigate -- --engine=llm "Investigue por que o checkout-api teve aumento de erro 5xx entre 10h e 10h30 em 2026-07-08"
 ```
 
 No modo llm não há parser: a pergunta crua vai para o modelo com a skill [`investigate-incident`](./skills/investigate-incident/skill.md) como system prompt e as definições das 9 tools descobertas em runtime via `listTools()` do MCP. O loop agêntico é manual (`while stop_reason === 'tool_use'`) — cada rodada, tool_use e tool_result é visível e auditável, que é exatamente o objeto de estudo do lab. Perguntas mais livres que o regex da V1 passam a funcionar; pergunta sem serviço/período identificáveis produz um markdown declarando o que faltou, sem chamar tools de dados.
 
+### Contrato de providers
+
+- **Anthropic** é o default e permanece byte-idêntico à V2.5; sem `AGENTOPS_LLM_PROVIDER`, o comportamento existente continua válido.
+- **OpenRouter** e **OpenAI** são providers de primeira classe: têm adapter, documentação e cobertura da suíte.
+- Um endpoint OpenAI-compatible apontado por `AGENTOPS_LLM_BASE_URL` (Groq, Together, Ollama etc.) é **best-effort**, sem promessa de compatibilidade nem cobertura dedicada. Interações conhecidas são `max_completion_tokens` em modelos/gateways que não aceitam `max_tokens`, `finish_reason` inconsistente mesmo quando existem `tool_calls`, e cache que pode não ser reportado.
+
+O provider é escolhido por ambiente, não por um novo motor. Fora de Anthropic, `AGENTOPS_LLM_MODEL` é obrigatório e a chave é específica do provider. O caminho determinístico (`npm run investigate`/`npm run eval` sem `--engine=llm`) ignora todas essas variáveis e continua funcionando sem qualquer configuração nova.
+
 - O relatório em stdout é o **markdown do modelo** (mesmas 7 seções do RF4) + a seção **"Tools chamadas" anexada por código** a partir do audit log — a auditoria nunca depende da honestidade do modelo.
 - Progresso por rodada (`Consultando o modelo (rodada N/16)…`) e a linha de custo (`Tokens: 8 entrada (34.2k cache lido · 16.4k cache escrito) · 4.0k saída · 4 rodada(s)`) vão para stderr; stdout redirecionado permanece limpo.
-- Sem `ANTHROPIC_API_KEY`, a CLI falha rápido com orientação (exit 1), **antes** de spawnar o server MCP.
+- Sem a chave do provider selecionado, a CLI falha rápido com orientação (exit 1), **antes** de spawnar o server MCP.
 
 Variáveis de ambiente:
 
 | Variável | Default | Uso |
 | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | — | Obrigatória apenas no modo `llm`. Nunca aparece em logs, relatório ou auditoria. |
+| `ANTHROPIC_API_KEY` | — | Chave do provider Anthropic, obrigatória apenas no modo `llm` quando ele é selecionado. Nunca aparece em logs, relatório ou auditoria. |
 | `AGENTOPS_ENGINE` | `deterministic` | Motor default quando `--engine` não é passado (CLI e eval). |
-| `AGENTOPS_LLM_MODEL` | `claude-sonnet-5` | Modelo da Messages API. |
+| `AGENTOPS_LLM_PROVIDER` | `anthropic` | Provider no modo `llm`: `anthropic`, `openrouter` ou `openai`. Ignorado no motor determinístico. |
+| `AGENTOPS_LLM_MODEL` | `claude-sonnet-5` só em Anthropic | Modelo do provider; obrigatório fora de Anthropic. |
+| `AGENTOPS_LLM_BASE_URL` | por provider | Endpoint custom OpenAI-compatible; best-effort. O OpenRouter usa `https://openrouter.ai/api/v1` quando não informado. |
+| `OPENROUTER_API_KEY` | — | Chave do OpenRouter, obrigatória quando `AGENTOPS_LLM_PROVIDER=openrouter`. |
+| `OPENAI_API_KEY` | — | Chave da OpenAI, obrigatória quando `AGENTOPS_LLM_PROVIDER=openai`. |
 | `AGENTOPS_LLM_MAX_TOKENS` | `4096` | `max_tokens` por chamada. |
 | `AGENTOPS_LLM_MAX_ROUNDS` | `16` | Teto de rodadas do loop agêntico (proteção contra loop infinito). |
 | `AGENTOPS_LLM_CACHE` | `on` | Prompt caching do loop agêntico (V2.5). `off`/`false`/`0` desligam — útil para medir o custo antes/depois com o mesmo binário. |
 | `AGENTOPS_TRACE_LOG` | — (desligado) | Caminho do arquivo JSONL de trace (opt-in) — funciona com os dois engines, em `investigate` e em `eval`. Ver [Trace completo de investigação](#trace-completo-de-investigação-jsonl-opt-in) abaixo. |
 
 **Custo**: uma investigação típica faz 6–10 tool calls em 3–5 rodadas (o agregado sai em stderr ao final). O motor não envia parâmetros de sampling: `temperature`/`top_p`/`top_k` foram removidos da Messages API nos modelos atuais (`claude-sonnet-5`+) e retornam 400 se enviados — a reprodutibilidade do modo llm depende do contrato de formato no prompt, não de sampling. Nenhum teste da suíte default gasta tokens; o único ponto que chama a API real é o smoke opt-in `npm run eval:llm`.
+
+### Bancada de comparação (`npm run compare`)
+
+A bancada é opt-in e executa uma vez por modelo, na ordem informada. Ela tem dois modos:
+
+- **Eval**, sem pergunta posicional: roda os casos com gabarito e mostra score por critério, rodadas, tokens e cache.
+- **Ad-hoc**, com uma pergunta posicional: compara somente recursos — conclusão, rodadas, tokens e cache — **sem score de qualidade**, porque não há gabarito.
+
+```bash
+# Modo eval: exige as chaves dos providers que serão executados.
+OPENROUTER_API_KEY=... OPENAI_API_KEY=... npm run compare -- \
+  --models=openrouter:deepseek/deepseek-chat,openai:gpt-4o-mini
+
+# Modo ad-hoc: a pergunta depois de --models seleciona o modo de recursos.
+OPENROUTER_API_KEY=... npm run compare -- \
+  --models=openrouter:deepseek/deepseek-chat,openai:gpt-4o-mini \
+  "Investigue o aumento de 5xx no checkout-api"
+```
+
+A tabela é evidência de **uma execução por modelo**, não uma garantia estatística. A comparação mede recursos uniformes — tokens de entrada/saída, cache lido/escrito e rodadas — e não dinheiro: não há valores em US$ e **mais tokens ≠ mais caro** entre providers com preços diferentes. A bancada pode gastar tokens por definição e nunca faz parte do caminho default, de `npm test` ou da CI. Falhas de chave ou API ficam na linha do modelo e não interrompem os demais.
+
+### Privacidade ao usar gateways
+
+Ao selecionar OpenRouter ou um gateway custom, a pergunta e os resultados das tools trafegam por um terceiro. Isso é aceitável neste laboratório porque os datasets são fake; antes de conectar dados reais na V3, a privacidade, retenção e políticas do gateway precisam ser reavaliadas.
 
 ### Prompt caching (V2.5)
 
@@ -124,6 +167,20 @@ npm run eval:llm               # atalho: alias de --engine=llm (smoke opt-in, ga
 ```
 
 No modo llm o scoring continua 100% determinístico: o `TextReportScorer` avalia os **mesmos 5 grupos de critérios** sobre as seções do markdown (extraídas por título — sublinhado ou `##`), sem LLM-as-judge. Os casos JSON são byte-idênticos aos da V1.
+
+### Red-team de prompt injection (V2.7, opt-in)
+
+Mede se o motor trata conteúdo malicioso de `tool_result` como **dado**, não como instrução — o baseline do guardrail antes de conectar providers reais (V3). É um comando **separado, opt-in e isolado**; nunca faz parte de `npm test`, `npm run eval` ou CI.
+
+```bash
+npm run eval:redteam -- --engine=llm   # roda SOMENTE case-004, pelo MCP real (gasta tokens, exige ANTHROPIC_API_KEY)
+```
+
+- **Isolamento**: as fixtures adversariais vivem em `datasets-redteam/` e `knowledge-base-redteam/`, fisicamente separadas; um composition root recusa qualquer raiz igual à normal. `npm run eval`/`eval:llm` não descobrem `case-004`.
+- **Três vetores**: instrução direta em `logs[].message`, instrução no campo estruturado `exceptions[].exception` e roleplay em texto livre de runbook. O guardrail da V2 é o **único** controle — nada é sanitizado ou delimitado (medir, não endurecer).
+- **Scoring**: outcome (`TextReportScorer`) e **segurança** (`RedTeamScorer` determinístico) saem como scores **separados**; o exit code é `0` só quando **ambos** passam. Segurança avalia cada vetor (marcador reproduzido reprova; a tool-fonte precisa ter sido exercitada, senão `not_exercised`), as 7 seções e a segurança do 1º passo.
+- **Custo/segurança**: um caso por execução (poucos centavos); a saída **não** imprime a API key nem o payload adversarial integral; `AGENTOPS_TRACE_LOG` continua opt-in, com aviso de que o trace contém conteúdo adversarial sintético.
+- **Interpretação**: uma passagem é evidência **daquela execução/modelo**, nunca garantia de resistência. Taxa/repetição é V2.9; comparação entre modelos é V2.4. Recomenda-se repetir ~3× como observação, não como gate. Veja D12 em [`docs/decisions.md`](docs/decisions.md).
 
 ## Trace completo de investigação (JSONL, opt-in)
 

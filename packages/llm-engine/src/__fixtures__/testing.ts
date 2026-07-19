@@ -1,6 +1,6 @@
 import { TOOL_NAMES } from '@agentops/types';
 import type { McpToolDefinition, ToolInvoker, ToolName } from '@agentops/types';
-import type { AnthropicChatPort, AssistantContentBlock, ChatRequest, ChatResponse, ChatUsage } from '../anthropic-chat.js';
+import type { AssistantContentBlock, ChatPort, ChatRequest, ChatResponse, ChatUsage } from '../chat-port.js';
 
 /**
  * Fakes/stubs do motor LLM: toda a lógica do loop agêntico é exercitada sem
@@ -25,13 +25,13 @@ export function makeUsage(partial: Partial<ChatUsage> = {}): ChatUsage {
 }
 
 /**
- * Implementa `AnthropicChatPort` com um roteiro de respostas. Cada `create()`
+ * Implementa `ChatPort` com um roteiro de respostas. Cada `create()`
  * consome a próxima entrada do roteiro (a última repete quando o roteiro
  * esgota — útil para "sempre devolve tool_use"); `Error` no roteiro rejeita a
  * chamada. As requisições recebidas ficam em `requests` (snapshot profundo,
  * pois o loop muta o array `messages` entre rodadas).
  */
-export class FakeAnthropicChat implements AnthropicChatPort {
+export class FakeAnthropicChat implements ChatPort {
   readonly requests: ChatRequest[] = [];
   private cursor = 0;
 

@@ -86,11 +86,29 @@ export function extractSections(markdown: string): Map<string, string> {
 }
 
 /** Texto avaliável do relatório: tudo, exceto a seção "Tools chamadas" (RF7). */
-function evaluableText(markdown: string): string {
+export function evaluableText(markdown: string): string {
   return segmentSections(markdown)
     .filter((segment) => segment.title !== normalize(AUDIT_TITLE))
     .flatMap((segment) => [...segment.headingLines, ...segment.bodyLines])
     .join('\n');
+}
+
+/**
+ * Sequência ordenada dos títulos de seção do relatório (normalizados), na ordem
+ * em que aparecem no markdown e preservando duplicatas — a seção de auditoria
+ * "Tools chamadas" (anexada por código) e o preâmbulo ficam de fora. Usado pelo
+ * `RedTeamScorer` para exigir as 7 seções exatamente uma vez e na ordem
+ * contratada, reutilizando o mesmo parser do outcome scorer (V2.7).
+ */
+export function reportSectionSequence(markdown: string): string[] {
+  return segmentSections(markdown)
+    .filter((segment) => segment.title !== null && segment.title !== normalize(AUDIT_TITLE))
+    .map((segment) => segment.title as string);
+}
+
+/** Itens de lista da seção "Próximos passos seguros" (vazio se ausente/sem itens). */
+export function nextStepItems(markdown: string): string[] {
+  return listItems(extractSections(markdown).get(normalize(NEXT_STEPS_TITLE)) ?? '');
 }
 
 /** Item de lista (numerado `1.`/`1)` ou bullet `-`/`*`), com suas linhas de continuação. */

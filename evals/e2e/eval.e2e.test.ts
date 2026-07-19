@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
+import { createChatPort } from '@agentops/cli-agent/chat-port-factory';
 import { McpToolInvoker } from '@agentops/cli-agent/mcp-tool-invoker';
 import {
-  AnthropicChatAdapter,
   buildSystemPrompt,
   LlmInvestigationAssistant,
   resolveLlmEngineConfig,
@@ -17,7 +17,7 @@ import { describe, expect, it } from 'vitest';
  * E2E do eval harness (teste 75 da techspec V1 + cenários da V2): `npm run
  * eval` como processo real — exit code 0, score por caso + resumo agregado,
  * case-001 em 100% (RF23). O smoke com LLM real (`npm run eval:llm`) é
- * opt-in: skipped sem `ANTHROPIC_API_KEY` — é o único teste da suíte que
+ * opt-in: skipped sem `OPENROUTER_API_KEY` — é o único teste da suíte que
  * gasta tokens, e apenas sob decisão explícita do usuário.
  */
 
@@ -63,6 +63,25 @@ describe('npm run eval', () => {
   }, 120_000);
 });
 
+describe('eval determinístico com envs de provider definidas', () => {
+  it('E2E-001: reproduz os scores sem exigir OPENAI_API_KEY', async () => {
+    const result = await execa('npm', ['run', '--silent', 'eval'], {
+      cwd: repoRoot,
+      reject: false,
+      env: {
+        AGENTOPS_LLM_PROVIDER: 'openai',
+        AGENTOPS_LLM_MODEL: 'gpt-test',
+        OPENAI_API_KEY: '',
+      },
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain('Resumo: 3/3 outcome(s) aprovado(s) · score médio 1.00');
+    expect(result.stdout).toContain('· engine: deterministic');
+    expect(result.stderr).not.toContain('OPENAI_API_KEY');
+  }, 120_000);
+});
+
 // V2 — flag inválida no eval
 describe('npm run eval -- --engine=foo', () => {
   it('sai com código 1 e orienta o uso, sem executar nenhum caso', async () => {
@@ -78,22 +97,41 @@ describe('npm run eval -- --engine=foo', () => {
   }, 90_000);
 });
 
-/**
- * Smoke opt-in com LLM real (V2): o ÚNICO ponto da suíte que gasta tokens —
- * skipped sem `ANTHROPIC_API_KEY` (nunca roda em CI por default). Exercita o
- * caminho do script `npm run eval:llm` (runner + motor LLM real + scorer
- * text-mode) restrito ao case-001, o menor custo possível.
- */
-const hasApiKey = (process.env['ANTHROPIC_API_KEY'] ?? '').trim() !== '';
+describe('npm run eval:llm com OpenAI sem chave', () => {
+  it('E2E-005: falha antes do spawn citando OPENAI_API_KEY e sem órfão', async () => {
+    const result = await execa('npm', ['run', '--silent', 'eval:llm'], {
+      cwd: repoRoot,
+      reject: false,
+      env: {
+        AGENTOPS_LLM_PROVIDER: 'openai',
+        AGENTOPS_LLM_MODEL: 'gpt-test',
+        OPENAI_API_KEY: '',
+      },
+    });
 
-describe('smoke opt-in com LLM real (npm run eval:llm)', () => {
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('OPENAI_API_KEY');
+    expect(result.stderr).not.toContain('Iniciando o agentops-server');
+    expect(result.stdout).toBe('');
+  }, 90_000);
+});
+
+/**
+ * Smoke opt-in com LLM real (E2E-004): o único ponto da V2.4 que gasta tokens —
+ * skipped sem `OPENROUTER_API_KEY` (nunca roda em CI por default). Exercita o
+ * caminho do eval (runner + motor LLM real + scorer text-mode) restrito ao
+ * case-001, com o baseline `deepseek/deepseek-chat` via OpenRouter.
+ */
+const hasOpenRouterApiKey = (process.env['OPENROUTER_API_KEY'] ?? '').trim() !== '';
+
+describe('E2E-004: smoke opt-in com OpenRouter (npm run eval:llm)', () => {
   it('o script eval:llm existe na raiz e aponta para o runner com --engine=llm', async () => {
     const { default: rootPackage } = await import(join(repoRoot, 'package.json'), { with: { type: 'json' } });
 
     expect(rootPackage.scripts['eval:llm']).toBe('tsx evals/src/runner.ts --engine=llm');
   });
 
-  it.skipIf(!hasApiKey)('pontua o case-001 com o motor LLM real e breakdown por critério', async () => {
+  it.skipIf(!hasOpenRouterApiKey)('pontua o case-001 com OpenRouter e breakdown por critério', async () => {
     const { loadCases, runEvals } = await import('../src/runner.js');
     const [case001] = await loadCases();
     expect(case001?.id).toBe('case-001-database-timeout');
@@ -103,11 +141,15 @@ describe('smoke opt-in com LLM real (npm run eval:llm)', () => {
     // de `rounds` e `cacheReadTokens`, que não saem em stdout. As definições
     // das tools são pré-carregadas de um server MCP efêmero; a investigação em
     // si usa o invoker que o próprio runner spawna.
-    const config = resolveLlmEngineConfig(process.env);
+    const config = resolveLlmEngineConfig({
+      ...process.env,
+      AGENTOPS_LLM_PROVIDER: 'openrouter',
+      AGENTOPS_LLM_MODEL: 'deepseek/deepseek-chat',
+    });
     const toolLoader = await McpToolInvoker.connect({ serverStderr: 'inherit' });
     const toolDefinitions = await toolLoader.listTools().finally(() => toolLoader.close());
     const assistant = new LlmInvestigationAssistant(
-      AnthropicChatAdapter.fromApiKey(config.apiKey),
+      createChatPort(config),
       async () => toolDefinitions,
       config,
       buildSystemPrompt(),

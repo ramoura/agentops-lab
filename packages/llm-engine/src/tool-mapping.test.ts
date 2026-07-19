@@ -3,17 +3,17 @@ import { TOOL_NAMES } from '@agentops/types';
 import type { McpToolDefinition } from '@agentops/types';
 import { mcpDefinitions } from './__fixtures__/testing.js';
 import { LlmEngineError } from './engine-config.js';
-import { mapMcpToolsToAnthropic } from './tool-mapping.js';
+import { mapMcpToolsToChatTools } from './tool-mapping.js';
 
 // ---------------------------------------------------------------------------
 // Test cases 14–16 da techspec V2 (mapeamento de tools)
 // ---------------------------------------------------------------------------
 
-describe('mapMcpToolsToAnthropic', () => {
+describe('mapMcpToolsToChatTools', () => {
   // Teste 14
   it('preserva name/description e faz passthrough de inputSchema → input_schema (por referência)', () => {
     const definitions = mcpDefinitions();
-    const mapped = mapMcpToolsToAnthropic(definitions);
+    const mapped = mapMcpToolsToChatTools(definitions);
 
     expect(mapped).toHaveLength(9);
     mapped.forEach((tool, index) => {
@@ -27,7 +27,7 @@ describe('mapMcpToolsToAnthropic', () => {
 
   // Teste 15 — as 9 presentes → ok
   it('aceita a lista completa das 9 tools de TOOL_NAMES', () => {
-    const mapped = mapMcpToolsToAnthropic(mcpDefinitions());
+    const mapped = mapMcpToolsToChatTools(mcpDefinitions());
     expect(mapped.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES].sort());
   });
 
@@ -36,7 +36,7 @@ describe('mapMcpToolsToAnthropic', () => {
     const incomplete = mcpDefinitions().filter((definition) => definition.name !== 'get_runbook');
     expect.assertions(3);
     try {
-      mapMcpToolsToAnthropic(incomplete);
+      mapMcpToolsToChatTools(incomplete);
     } catch (error) {
       expect(error).toBeInstanceOf(LlmEngineError);
       expect((error as LlmEngineError).code).toBe('invalid_config');
@@ -55,7 +55,7 @@ describe('mapMcpToolsToAnthropic', () => {
         annotations: { readOnlyHint: true },
       } as unknown as McpToolDefinition,
     ];
-    expect(() => mapMcpToolsToAnthropic(definitions)).toThrowError(
+    expect(() => mapMcpToolsToChatTools(definitions)).toThrowError(
       expect.objectContaining({ code: 'invalid_config', message: expect.stringContaining('delete_all_data') }),
     );
   });
@@ -65,7 +65,7 @@ describe('mapMcpToolsToAnthropic', () => {
     const definitions = mcpDefinitions();
     const first = definitions[0] as McpToolDefinition;
     first.annotations = hint === undefined ? undefined : { readOnlyHint: hint };
-    expect(() => mapMcpToolsToAnthropic(definitions)).toThrowError(
+    expect(() => mapMcpToolsToChatTools(definitions)).toThrowError(
       expect.objectContaining({ code: 'invalid_config', message: expect.stringContaining('readOnlyHint') }),
     );
   });

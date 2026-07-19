@@ -96,7 +96,7 @@ describe('formatUsageLine', () => {
   });
 
   // Teste 18
-  it('cache == 0 → formato da V2 preservado, sem parêntese vazio', () => {
+  it('UT-040: provider openai com cache write 0 usa a linha uniforme, sem caminho especial', () => {
     const line = formatUsageLine({
       inputTokens: 57300,
       outputTokens: 5100,

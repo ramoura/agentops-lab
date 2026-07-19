@@ -223,7 +223,12 @@ export function renderRecord(record: InvestigationTraceRecord, useColor: boolean
   const c = colorizer(useColor);
   const lines: string[] = [];
 
-  const label = record.source === 'eval' ? `eval · ${record.caseId ?? '?'}` : 'investigate';
+  const label =
+    record.source === 'eval'
+      ? `eval · ${record.caseId ?? '?'}`
+      : record.source === 'compare'
+        ? `compare · ${record.caseId ?? '?'}`
+        : 'investigate';
   lines.push(c.title(`═══ ${label} ═══`));
   lines.push(`traceId:  ${record.traceId}`);
   lines.push(`runId:    ${record.runId}`);

@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { LlmInvestigationAssistant } from '@agentops/llm-engine';
 import type { AssistantContentBlock, LlmEngineConfig, UserContentBlock } from '@agentops/llm-engine';
 import { endTurn, FakeAnthropicChat, toolUseBlock, toolUseRound } from '@agentops/llm-engine/testing';
+import { FakeChatCompletions, completion, toolCall } from '@agentops/openai-engine/testing';
+import { OpenAiChatAdapter } from '@agentops/openai-engine';
 import { McpToolInvoker } from './mcp-tool-invoker.js';
 
 /**
@@ -17,6 +19,8 @@ const WINDOW = { from: '2026-07-08T10:00:00-03:00', to: '2026-07-08T10:30:00-03:
 const MARKDOWN = '## Resumo executivo\nPico de 5xx no checkout-api correlacionado ao deploy 2026.07.08-1.';
 
 const CONFIG: LlmEngineConfig = {
+  provider: 'anthropic',
+  baseUrl: null,
   apiKey: 'sk-ant-fake-integracao',
   model: 'claude-sonnet-5',
   maxTokens: 4096,
@@ -127,5 +131,57 @@ describe('loop LLM com MCP real e modelo fake', () => {
       { seq: 1, tool: 'get_error_summary' },
     ]);
     expect(outcome.markdown).toBe(MARKDOWN);
+  }, 30_000);
+
+  it('IT-001: OpenAI-compatible entrega as 9 tools reais como function e mantém audit/outcome do caminho Anthropic', async () => {
+    const chat = new FakeChatCompletions([
+      completion(null, 'tool_calls', {
+        toolCalls: [
+          toolCall('call-1', 'get_error_summary', { service: 'checkout-api', ...WINDOW }),
+          toolCall('call-2', 'get_top_exceptions', { service: 'checkout-api', ...WINDOW }),
+        ],
+      }),
+      completion(MARKDOWN),
+    ]);
+    const assistant = new LlmInvestigationAssistant(
+      new OpenAiChatAdapter(chat, 'openai', CONFIG.apiKey),
+      () => invoker.listTools(),
+      { ...CONFIG, provider: 'openai', model: 'gpt-test', cacheEnabled: false },
+      'system prompt de teste',
+    );
+
+    const outcome = await assistant.investigate(QUESTION, invoker);
+
+    expect(chat.requests[0]?.tools).toHaveLength(9);
+    expect(chat.requests[0]?.tools.every((tool) => tool.type === 'function')).toBe(true);
+    expect(chat.requests[0]?.tools.map((tool) => tool.function.name)).toEqual(expect.arrayContaining([
+      'get_error_summary',
+      'get_top_exceptions',
+      'get_recent_logs',
+      'get_latency_summary',
+      'get_deployment_events',
+      'search_runbooks',
+      'get_runbook',
+      'search_adrs',
+      'search_tech_specs',
+    ]));
+    expect(outcome).toMatchObject({ kind: 'markdown', markdown: MARKDOWN });
+    if (outcome.kind !== 'markdown') return;
+    expect(outcome.audit.map((record) => ({ seq: record.seq, tool: record.tool }))).toEqual([
+      { seq: 1, tool: 'get_error_summary' },
+      { seq: 2, tool: 'get_top_exceptions' },
+    ]);
+    const toolResultOne = chat.requests[1]?.messages.find(
+      (message) => message.role === 'tool' && message.tool_call_id === 'call-1',
+    );
+    const toolResultTwo = chat.requests[1]?.messages.find(
+      (message) => message.role === 'tool' && message.tool_call_id === 'call-2',
+    );
+    if (toolResultOne?.role !== 'tool' || typeof toolResultOne.content !== 'string') return;
+    const errorSummary = JSON.parse(
+      toolResultOne.content,
+    ) as Record<string, unknown>;
+    expect(errorSummary['hasData']).toBe(true);
+    expect(toolResultTwo?.role === 'tool' ? toolResultTwo.content : '').toContain('DatabaseTimeoutException');
   }, 30_000);
 });

@@ -1,0 +1,15 @@
+{
+  "name": "@agentops/openai-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Motor LLM do AgentOps Lab — adapter OpenAI-compatible para chat/completions",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/__fixtures__/testing.ts"
+  },
+  "dependencies": {
+    "@agentops/llm-engine": "0.1.0",
+    "openai": "^6.25.0"
+  }
+}

@@ -17,6 +17,8 @@
     "investigate": "tsx apps/cli-agent/src/main.ts",
     "eval": "tsx evals/src/runner.ts",
     "eval:llm": "tsx evals/src/runner.ts --engine=llm",
+    "compare": "tsx evals/src/compare-runner.ts",
+    "eval:redteam": "tsx evals/src/redteam-runner.ts --engine=llm",
     "trace:view": "tsx apps/cli-agent/src/trace-view.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

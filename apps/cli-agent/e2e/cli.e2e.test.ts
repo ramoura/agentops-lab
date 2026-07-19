@@ -54,6 +54,20 @@ describe('npm run investigate -- "<pergunta case-001>"', () => {
   }, 90_000);
 });
 
+describe('default deterministico com envs de provider definidas', () => {
+  it('E2E-001: ignora provider/model/chave e não aciona adapter OpenAI', async () => {
+    const result = await runInvestigate(['--', QUESTION_CASE_001], {
+      AGENTOPS_LLM_PROVIDER: 'openai',
+      AGENTOPS_LLM_MODEL: 'gpt-test',
+      OPENAI_API_KEY: '',
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expectSectionsInOrder(result.stdout);
+    expect(result.stderr).not.toContain('OPENAI_API_KEY');
+  }, 90_000);
+});
+
 // Teste 72
 describe('pergunta ambígua (US10)', () => {
   it('orienta listando serviço e janela faltantes, sem chamar nenhuma tool, exit code 0', async () => {
@@ -112,6 +126,22 @@ describe('npm run investigate -- --engine=llm sem ANTHROPIC_API_KEY', () => {
     expect(result.stdout).toBe('');
     // Validação acontece ANTES do spawn do agentops-server
     expect(result.stderr).not.toContain('Iniciando o agentops-server');
+  }, 90_000);
+});
+
+describe('npm run investigate -- --engine=llm com OpenRouter sem chave', () => {
+  it('E2E-002: falha antes do spawn citando OPENROUTER_API_KEY', async () => {
+    const result = await runInvestigate(['--', '--engine=llm', QUESTION_CASE_001], {
+      AGENTOPS_LLM_PROVIDER: 'openrouter',
+      AGENTOPS_LLM_MODEL: 'deepseek/deepseek-chat',
+      OPENROUTER_API_KEY: '',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('OPENROUTER_API_KEY');
+    expect(result.stderr).not.toContain('ANTHROPIC_API_KEY');
+    expect(result.stderr).not.toContain('Iniciando o agentops-server');
+    expect(result.stdout).toBe('');
   }, 90_000);
 });
 
